@@ -112,7 +112,7 @@ pub fn poll(only_me: bool) -> Poller<bool, Vec<Job>> {
 mod tests {
     use super::*;
 
-    const RUNNING: &str = "308208|32gpus|train-a|bob|RUNNING|\
+    const RUNNING: &str = "308208|32gpus|train-a|alice|RUNNING|\
         cpu=96,mem=4800G,node=3,billing=96,gres/gpu=24|22:46:39|3|gpn[001-003]|None";
 
     /// The format string is written across two lines; the continuation must
@@ -152,10 +152,9 @@ mod tests {
 
     #[test]
     fn marks_a_job_that_asked_for_no_gpus() {
-        let job = Job::parse(
-            "312000|dev|cpu-only|alice|RUNNING|cpu=2,mem=16G,node=1|0:05|1|n01|None",
-        )
-        .expect("parsed");
+        let job =
+            Job::parse("312000|dev|cpu-only|alice|RUNNING|cpu=2,mem=16G,node=1|0:05|1|n01|None")
+                .expect("parsed");
 
         assert_eq!(job.gpus, "-");
         assert_eq!(job.mem, "16G");
