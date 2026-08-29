@@ -2,6 +2,8 @@
 
 A top-like terminal view of Slurm jobs, built for NCHC clusters.
 
+![nchctop showing the queue and the last 30 days of jobs](docs/screenshot.svg)
+
 ## Install
 
     curl -LsSf https://raw.githubusercontent.com/tanchihpin0517/nchctop/main/install.sh | sh

@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1128" height="664" viewBox="0 0 1128.00 664.00" font-family="ui-monospace, SFMono-Regular, &#34;JetBrains Mono&#34;, Menlo, Consolas, &#34;DejaVu Sans Mono&#34;, monospace" font-size="14">
+<rect width="1128.00" height="664.00" rx="8.0" fill="#14171d"/>
+<rect width="1128.00" height="26" rx="8.0" fill="#1c1f26"/>
+<rect y="18" width="1128.00" height="8" fill="#1c1f26"/>
+<circle cx="18" cy="13" r="5.5" fill="#ec6a5e"/>
+<circle cx="34" cy="13" r="5.5" fill="#f4bf4f"/>
+<circle cx="50" cy="13" r="5.5" fill="#61c554"/>
+<text x="564.00" y="17" fill="#6b7280" font-size="11" text-anchor="middle">nchctop</text>
+<rect x="26.40" y="142.00" width="487.20" height="18.00" fill="#c3c8d1"/>
+<rect x="513.60" y="142.00" width="75.60" height="18.00" fill="#98c379"/>
+<rect x="589.20" y="142.00" width="512.40" height="18.00" fill="#c3c8d1"/>
+<text x="26.40" y="47.00" fill="#6b7280" textLength="151.20" lengthAdjust="spacing" xml:space="preserve">wallet · MST000000</text>
+<text x="186.00" y="47.00" fill="#98c379" textLength="84.00" lengthAdjust="spacing" xml:space="preserve">90668.9 SU</text>
+<text x="278.40" y="47.00" fill="#6b7280" textLength="92.40" lengthAdjust="spacing" xml:space="preserve">· ACD000000</text>
+<text x="379.20" y="47.00" fill="#e06c75" textLength="75.60" lengthAdjust="spacing" xml:space="preserve">-881.2 SU</text>
+<text x="606.00" y="47.00" fill="#6b7280" textLength="75.60" lengthAdjust="spacing" xml:space="preserve">cost · 1d</text>
+<text x="690.00" y="47.00" fill="#c3c8d1" textLength="92.40" lengthAdjust="spacing" xml:space="preserve">218124.0 SU</text>
+<text x="790.80" y="47.00" fill="#6b7280" textLength="33.60" lengthAdjust="spacing" xml:space="preserve">· 7d</text>
+<text x="832.80" y="47.00" fill="#c3c8d1" textLength="100.80" lengthAdjust="spacing" xml:space="preserve">2776031.3 SU</text>
+<text x="942.00" y="47.00" fill="#6b7280" textLength="42.00" lengthAdjust="spacing" xml:space="preserve">· 30d</text>
+<text x="992.40" y="47.00" fill="#c3c8d1" textLength="109.20" lengthAdjust="spacing" xml:space="preserve">11080635.0 SU</text>
+<text x="18.00" y="65.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">┌</text>
+<text x="26.40" y="65.00" fill="#56b6c2" textLength="67.20" lengthAdjust="spacing" xml:space="preserve"> queue ·</text>
+<text x="102.00" y="65.00" fill="#6b7280" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">93 jobs</text>
+<text x="169.20" y="65.00" fill="#56b6c2" textLength="940.80" lengthAdjust="spacingAndGlyphs" xml:space="preserve">───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text x="18.00" y="83.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="83.00" fill="#c3c8d1" font-weight="600" textLength="982.80" lengthAdjust="spacing" xml:space="preserve">JOBID    PARTITION NAME                         USER      STATE     CPU  GPU MEM    TIME       NODES NODELIST(REASON)</text>
+<text x="1101.60" y="83.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="101.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="101.00" fill="#c3c8d1" textLength="470.40" lengthAdjust="spacing" xml:space="preserve">312614   16gpus    diffusion_bf16               u1000026</text>
+<text x="513.60" y="101.00" fill="#e5c07b" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">PENDING</text>
+<text x="597.60" y="101.00" fill="#c3c8d1" textLength="369.60" lengthAdjust="spacing" xml:space="preserve">192  16  3200G  0:00       2     (Resources)</text>
+<text x="1101.60" y="101.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="119.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="119.00" fill="#c3c8d1" textLength="470.40" lengthAdjust="spacing" xml:space="preserve">312613   16gpus    render_shard0                u1000026</text>
+<text x="513.60" y="119.00" fill="#e5c07b" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">PENDING</text>
+<text x="597.60" y="119.00" fill="#c3c8d1" textLength="369.60" lengthAdjust="spacing" xml:space="preserve">192  16  3200G  0:00       2     (Resources)</text>
+<text x="1101.60" y="119.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="137.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="137.00" fill="#c3c8d1" textLength="470.40" lengthAdjust="spacing" xml:space="preserve">312589   16gpus    vit_xl                       u1000075</text>
+<text x="513.60" y="137.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="597.60" y="137.00" fill="#c3c8d1" textLength="420.00" lengthAdjust="spacing" xml:space="preserve">64   16  1800G  1:13:17    2     25a-hgpn[045-046]</text>
+<text x="1101.60" y="137.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="155.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="155.00" fill="#14171d" textLength="991.20" lengthAdjust="spacing" xml:space="preserve">312686   16gpus    qm_opt_ablate                u1000044  RUNNING   192  16  3200G  2:50       2     25a-hgpn[007-008]</text>
+<text x="1101.60" y="155.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="173.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="173.00" fill="#c3c8d1" textLength="470.40" lengthAdjust="spacing" xml:space="preserve">312687   16gpus    tts_shard0                   u1000044</text>
+<text x="513.60" y="173.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="597.60" y="173.00" fill="#c3c8d1" textLength="420.00" lengthAdjust="spacing" xml:space="preserve">192  16  3200G  2:50       2     25a-hgpn[009-010]</text>
+<text x="1101.60" y="173.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="191.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="191.00" fill="#c3c8d1" textLength="445.20" lengthAdjust="spacing" xml:space="preserve">312649   16gpus    asr_ft_fp8                   ychou</text>
+<text x="513.60" y="191.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="597.60" y="191.00" fill="#c3c8d1" textLength="420.00" lengthAdjust="spacing" xml:space="preserve">192  16  3200G  11:34      2     25a-hgpn[160-161]</text>
+<text x="1101.60" y="191.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="209.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="209.00" fill="#c3c8d1" textLength="470.40" lengthAdjust="spacing" xml:space="preserve">312683   16gpus    qm_opt_shard1                u1000026</text>
+<text x="513.60" y="209.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="597.60" y="209.00" fill="#c3c8d1" textLength="420.00" lengthAdjust="spacing" xml:space="preserve">192  16  3200G  4:30       2     25a-hgpn[053-054]</text>
+<text x="1101.60" y="209.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="227.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="227.00" fill="#c3c8d1" textLength="470.40" lengthAdjust="spacing" xml:space="preserve">309482   32gpus    pretrain_warm                u1000116</text>
+<text x="513.60" y="227.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="597.60" y="227.00" fill="#c3c8d1" textLength="420.00" lengthAdjust="spacing" xml:space="preserve">96   24  4800G  4:13:18    3     25a-hgpn[024-026]</text>
+<text x="1101.60" y="227.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="245.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="245.00" fill="#c3c8d1" textLength="470.40" lengthAdjust="spacing" xml:space="preserve">309483   32gpus    embed_b1                     u1000116</text>
+<text x="513.60" y="245.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="597.60" y="245.00" fill="#c3c8d1" textLength="420.00" lengthAdjust="spacing" xml:space="preserve">96   24  4800G  4:13:18    3     25a-hgpn[059-061]</text>
+<text x="1101.60" y="245.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="263.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="263.00" fill="#c3c8d1" textLength="470.40" lengthAdjust="spacing" xml:space="preserve">309484   32gpus    rl_rollout_8n                u1000116</text>
+<text x="513.60" y="263.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="597.60" y="263.00" fill="#c3c8d1" textLength="420.00" lengthAdjust="spacing" xml:space="preserve">96   24  4800G  4:13:18    3     25a-hgpn[048-050]</text>
+<text x="1101.60" y="263.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="281.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="281.00" fill="#c3c8d1" textLength="470.40" lengthAdjust="spacing" xml:space="preserve">311867   64gpus    segment3d_lr3e4              u1000050</text>
+<text x="513.60" y="281.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="597.60" y="281.00" fill="#c3c8d1" textLength="420.00" lengthAdjust="spacing" xml:space="preserve">768  64  12000G 12:23:56   8     25a-hgpn[033-040]</text>
+<text x="1101.60" y="281.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="299.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="299.00" fill="#c3c8d1" textLength="445.20" lengthAdjust="spacing" xml:space="preserve">311569   8gpus     dock_xl                      pchou</text>
+<text x="513.60" y="299.00" fill="#e5c07b" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">PENDING</text>
+<text x="597.60" y="299.00" fill="#c3c8d1" textLength="378.00" lengthAdjust="spacing" xml:space="preserve">8    1   128G   0:00       1     (Dependency)</text>
+<text x="1101.60" y="299.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="317.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="317.00" fill="#c3c8d1" textLength="445.20" lengthAdjust="spacing" xml:space="preserve">311568   8gpus     dock_xl                      pchou</text>
+<text x="513.60" y="317.00" fill="#e5c07b" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">PENDING</text>
+<text x="597.60" y="317.00" fill="#c3c8d1" textLength="378.00" lengthAdjust="spacing" xml:space="preserve">8    1   128G   0:00       1     (Dependency)</text>
+<text x="1101.60" y="317.00" fill="#56b6c2" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="335.00" fill="#c3c8d1" textLength="1092.00" lengthAdjust="spacingAndGlyphs" xml:space="preserve">└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+<text x="18.00" y="353.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">┌</text>
+<text x="26.40" y="353.00" fill="#6b7280" textLength="193.20" lengthAdjust="spacing" xml:space="preserve"> last 30d · 83912 jobs </text>
+<text x="219.60" y="353.00" fill="#6b7280" textLength="890.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">─────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text x="18.00" y="371.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="371.00" fill="#c3c8d1" font-weight="600" textLength="1058.40" lengthAdjust="spacing" xml:space="preserve">JOBID     PARTITION NAME                                    USER      STATE         CPU  GPU MEM    ELAPSED   END         EXIT</text>
+<text x="1101.60" y="371.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="389.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="389.00" fill="#c3c8d1" textLength="571.20" lengthAdjust="spacing" xml:space="preserve">312691    dev       pretrain_final                          u1000090</text>
+<text x="614.40" y="389.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="732.00" y="389.00" fill="#c3c8d1" textLength="344.40" lengthAdjust="spacing" xml:space="preserve">2    1   8G     00:00:03  Unknown     0:0</text>
+<text x="1101.60" y="389.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="407.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="407.00" fill="#c3c8d1" textLength="571.20" lengthAdjust="spacing" xml:space="preserve">312690    dev       asr_ft_ep20                             u1000090</text>
+<text x="614.40" y="407.00" fill="#98c379" textLength="75.60" lengthAdjust="spacing" xml:space="preserve">COMPLETED</text>
+<text x="732.00" y="407.00" fill="#c3c8d1" textLength="344.40" lengthAdjust="spacing" xml:space="preserve">2    1   8G     00:00:03  08-29 16:05 0:0</text>
+<text x="1101.60" y="407.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="425.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="425.00" fill="#c3c8d1" textLength="571.20" lengthAdjust="spacing" xml:space="preserve">312689    8gpus     distill_b1                              u1000026</text>
+<text x="614.40" y="425.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="732.00" y="425.00" fill="#c3c8d1" textLength="344.40" lengthAdjust="spacing" xml:space="preserve">96   8   1600G  00:00:21  Unknown     0:0</text>
+<text x="1101.60" y="425.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="443.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="443.00" fill="#c3c8d1" textLength="546.00" lengthAdjust="spacing" xml:space="preserve">312688    dev       diffusion_2n                            ychou</text>
+<text x="614.40" y="443.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="732.00" y="443.00" fill="#c3c8d1" textLength="344.40" lengthAdjust="spacing" xml:space="preserve">12   1   200G   00:02:37  Unknown     0:0</text>
+<text x="1101.60" y="443.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="461.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="461.00" fill="#c3c8d1" textLength="571.20" lengthAdjust="spacing" xml:space="preserve">312687    16gpus    tts_shard0                              u1000044</text>
+<text x="614.40" y="461.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="732.00" y="461.00" fill="#c3c8d1" textLength="344.40" lengthAdjust="spacing" xml:space="preserve">192  16  3200G  00:02:50  Unknown     0:0</text>
+<text x="1101.60" y="461.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="479.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="479.00" fill="#c3c8d1" textLength="571.20" lengthAdjust="spacing" xml:space="preserve">312686    16gpus    qm_opt_ablate                           u1000044</text>
+<text x="614.40" y="479.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="732.00" y="479.00" fill="#c3c8d1" textLength="344.40" lengthAdjust="spacing" xml:space="preserve">192  16  3200G  00:02:50  Unknown     0:0</text>
+<text x="1101.60" y="479.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="497.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="497.00" fill="#c3c8d1" textLength="537.60" lengthAdjust="spacing" xml:space="preserve">312685_0  dev       ft_lora_h100                            slin</text>
+<text x="614.40" y="497.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="732.00" y="497.00" fill="#c3c8d1" textLength="344.40" lengthAdjust="spacing" xml:space="preserve">12   1   200G   00:03:20  Unknown     0:0</text>
+<text x="1101.60" y="497.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="515.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="515.00" fill="#c3c8d1" textLength="571.20" lengthAdjust="spacing" xml:space="preserve">312684    dev       tokenize_bf16                           u1000153</text>
+<text x="614.40" y="515.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="732.00" y="515.00" fill="#c3c8d1" textLength="344.40" lengthAdjust="spacing" xml:space="preserve">12   1   200G   00:04:18  Unknown     0:0</text>
+<text x="1101.60" y="515.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="533.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="533.00" fill="#c3c8d1" textLength="571.20" lengthAdjust="spacing" xml:space="preserve">312683    16gpus    qm_opt_shard1                           u1000026</text>
+<text x="614.40" y="533.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="732.00" y="533.00" fill="#c3c8d1" textLength="344.40" lengthAdjust="spacing" xml:space="preserve">192  16  3200G  00:04:30  Unknown     0:0</text>
+<text x="1101.60" y="533.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="551.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="551.00" fill="#c3c8d1" textLength="546.00" lengthAdjust="spacing" xml:space="preserve">312682    dev       diffusion_2n                            ychou</text>
+<text x="614.40" y="551.00" fill="#e06c75" textLength="50.40" lengthAdjust="spacing" xml:space="preserve">FAILED</text>
+<text x="732.00" y="551.00" fill="#c3c8d1" textLength="344.40" lengthAdjust="spacing" xml:space="preserve">12   1   200G   00:00:17  08-29 16:00 4:0</text>
+<text x="1101.60" y="551.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="569.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="569.00" fill="#c3c8d1" textLength="571.20" lengthAdjust="spacing" xml:space="preserve">312681    dev       rl_rollout_ablate                       u1000026</text>
+<text x="614.40" y="569.00" fill="#98c379" textLength="75.60" lengthAdjust="spacing" xml:space="preserve">COMPLETED</text>
+<text x="732.00" y="569.00" fill="#c3c8d1" textLength="344.40" lengthAdjust="spacing" xml:space="preserve">4    1   200G   00:00:00  08-29 15:59 0:0</text>
+<text x="1101.60" y="569.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="587.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="587.00" fill="#c3c8d1" textLength="537.60" lengthAdjust="spacing" xml:space="preserve">312680    8gpus     eval                                    dlai</text>
+<text x="614.40" y="587.00" fill="#98c379" textLength="58.80" lengthAdjust="spacing" xml:space="preserve">RUNNING</text>
+<text x="732.00" y="587.00" fill="#c3c8d1" textLength="344.40" lengthAdjust="spacing" xml:space="preserve">96   8   1600G  00:07:58  Unknown     0:0</text>
+<text x="1101.60" y="587.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="605.00" fill="#c3c8d1" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="26.40" y="605.00" fill="#c3c8d1" textLength="537.60" lengthAdjust="spacing" xml:space="preserve">312679    8gpus     diffusion_resume                        ysun</text>
+<text x="614.40" y="605.00" fill="#98c379" textLength="75.60" lengthAdjust="spacing" xml:space="preserve">COMPLETED</text>
+<text x="732.00" y="605.00" fill="#c3c8d1" textLength="344.40" lengthAdjust="spacing" xml:space="preserve">12   1   200G   00:04:50  08-29 16:00 0:0</text>
+<text x="1101.60" y="605.00" fill="#6b7280" textLength="8.40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="18.00" y="623.00" fill="#c3c8d1" textLength="1092.00" lengthAdjust="spacingAndGlyphs" xml:space="preserve">└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+<text x="26.40" y="641.00" fill="#c3c8d1" textLength="579.60" lengthAdjust="spacing" xml:space="preserve">all · tab focus · j/k move · ^d/^u page · m mine · r refresh · q quit</text>
+</svg>
