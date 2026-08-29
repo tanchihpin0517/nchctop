@@ -128,6 +128,26 @@ version_of() {
     "$1" --version 2>/dev/null | awk 'NR == 1 { print $NF }'
 }
 
+# Whether the first version is older than the second, comparing the
+# dot-separated numbers left to right and treating a missing part as zero. A
+# suffix like -rc1 counts for nothing, which is enough for the only question
+# asked of this: has the installed binary got ahead of the release we found?
+is_older() {
+    awk -v a="$1" -v b="$2" '
+        BEGIN {
+            n = split(a, x, ".")
+            m = split(b, y, ".")
+
+            for (i = 1; i <= (n > m ? n : m); i++) {
+                if (x[i] + 0 != y[i] + 0) {
+                    exit (x[i] + 0 < y[i] + 0) ? 0 : 1
+                }
+            }
+
+            exit 1
+        }'
+}
+
 # The version of the latest release, taken from the tag that
 # /releases/latest redirects to. Nothing depends on knowing it: when it cannot
 # be worked out the download below settles the same question, a few megabytes
@@ -154,9 +174,21 @@ else
     want="$(latest_version)"
 fi
 
-if [ -n "$want" ] && [ "$installed" = "$want" ] && [ "$FORCE" -eq 0 ]; then
-    say "Already at $installed, nothing to do (--force to reinstall)"
-    exit 0
+if [ -n "$want" ] && [ "$FORCE" -eq 0 ]; then
+    if [ "$installed" = "$want" ]; then
+        say "Already at $installed, nothing to do (--force to reinstall)"
+        exit 0
+    fi
+
+    # Going backwards is not an update. GitHub can answer with the release
+    # before the newest for a few minutes after one is published, and a
+    # startup check that took that at its word would replace a new binary
+    # with an old one and undo it again on the next run. Asking for a
+    # version by name is different: that is a downgrade somebody chose.
+    if [ -n "$installed" ] && [ -z "$VERSION" ] && is_older "$want" "$installed"; then
+        say "Already at $installed, which is newer than the latest release $want"
+        exit 0
+    fi
 fi
 
 if command -v sha256sum >/dev/null 2>&1; then
@@ -194,9 +226,18 @@ chmod +x "$tmp/nchctop"
 downloaded="$(version_of "$tmp/nchctop")"
 [ -n "$downloaded" ] || err "The downloaded binary does not run on this machine; install from source with: cargo install --git https://github.com/$REPO"
 
-if [ "$installed" = "$downloaded" ] && [ "$FORCE" -eq 0 ]; then
-    say "Already at $installed, nothing to do (--force to reinstall)"
-    exit 0
+# The same two checks again, now against the binary itself rather than a tag:
+# this is all there is to go on when the release could not be named up front.
+if [ "$FORCE" -eq 0 ]; then
+    if [ "$installed" = "$downloaded" ]; then
+        say "Already at $installed, nothing to do (--force to reinstall)"
+        exit 0
+    fi
+
+    if [ -n "$installed" ] && [ -z "$VERSION" ] && is_older "$downloaded" "$installed"; then
+        say "Already at $installed, which is newer than the latest release $downloaded"
+        exit 0
+    fi
 fi
 
 mkdir -p "$INSTALL_DIR"
@@ -205,6 +246,8 @@ mv -f "$tmp/nchctop" "$target"
 
 if [ "$installed" = "$downloaded" ]; then
     say "Reinstalled nchctop $downloaded in $INSTALL_DIR"
+elif [ -n "$installed" ] && is_older "$downloaded" "$installed"; then
+    say "Downgraded nchctop $installed -> $downloaded in $INSTALL_DIR"
 elif [ -n "$installed" ]; then
     say "Updated nchctop $installed -> $downloaded in $INSTALL_DIR"
 else
