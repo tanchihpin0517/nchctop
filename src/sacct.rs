@@ -5,7 +5,8 @@ use std::time::Duration;
 use crate::poller::Poller;
 
 /// The sacct fields we ask for, in the order the table renders them.
-const FORMAT: &str = "JobID,Partition,JobName,User,State,Elapsed,End,ExitCode";
+/// `AllocTRES` expands into the CPU, GPU and memory columns.
+const FORMAT: &str = "JobID,Partition,JobName,User,State,AllocTRES,Elapsed,End,ExitCode";
 
 /// How far back the recent view looks.
 const WINDOW: &str = "now-1days";
@@ -21,6 +22,9 @@ pub struct Run {
     pub name: String,
     pub user: String,
     pub state: String,
+    pub cpus: String,
+    pub gpus: String,
+    pub mem: String,
     pub elapsed: String,
     pub end: String,
     pub exit: String,
@@ -31,10 +35,14 @@ impl Run {
     /// have every field, so one malformed row cannot take the whole refresh
     /// down.
     fn parse(line: &str) -> Option<Self> {
-        let fields: Vec<&str> = line.splitn(8, '|').collect();
-        let [id, partition, name, user, state, elapsed, end, exit] = fields[..] else {
+        let fields: Vec<&str> = line.splitn(9, '|').collect();
+        let [id, partition, name, user, state, tres, elapsed, end, exit] = fields[..] else {
             return None;
         };
+
+        // A job that asked for no GPUs has no gres/gpu entry at all, rather
+        // than a zero.
+        let resource = |key| tres_value(tres, key).unwrap_or("-").to_string();
 
         Some(Self {
             id: id.trim().to_string(),
@@ -42,11 +50,44 @@ impl Run {
             name: name.trim().to_string(),
             user: user.trim().to_string(),
             state: state_name(state.trim()),
+            cpus: resource("cpu"),
+            gpus: resource("gres/gpu"),
+            mem: tres_value(tres, "mem").map_or("-".to_string(), gigabytes),
             elapsed: elapsed.trim().to_string(),
             end: short_time(end.trim()),
             exit: exit.trim().to_string(),
         })
     }
+}
+
+/// Pull one value out of a TRES list such as
+/// `billing=12,cpu=12,gres/gpu=1,mem=200G,node=1`.
+fn tres_value<'a>(spec: &'a str, key: &str) -> Option<&'a str> {
+    spec.split(',')
+        .filter_map(|entry| entry.split_once('='))
+        .find(|(name, _)| *name == key)
+        .map(|(_, value)| value)
+}
+
+/// A job is allocated memory in whatever unit it asked in, so put them all in
+/// gigabytes and let the column compare like with like.
+fn gigabytes(mem: &str) -> String {
+    let Some((value, unit)) = mem.split_at_checked(mem.len().saturating_sub(1)) else {
+        return mem.to_string();
+    };
+    let Ok(value) = value.parse::<f64>() else {
+        return mem.to_string();
+    };
+
+    let gb = match unit {
+        "K" => value / (1024.0 * 1024.0),
+        "M" => value / 1024.0,
+        "G" => value,
+        "T" => value * 1024.0,
+        _ => return mem.to_string(),
+    };
+
+    format!("{}G", gb.round())
 }
 
 /// Slurm reports a cancelled job as `CANCELLED by 12345`. The uid that did it
@@ -122,13 +163,17 @@ mod tests {
 
     #[test]
     fn parses_a_finished_job() {
-        let run =
-            Run::parse("310011|dev|train-a|alice|FAILED|00:00:14|2026-08-28T19:56:24|1:0")
-                .expect("parsed");
+        let run = Run::parse(
+            "310011|dev|train-a|alice|FAILED|billing=12,cpu=12,gres/gpu=1,mem=200G,node=1|00:00:14|2026-08-28T19:56:24|1:0",
+        )
+        .expect("parsed");
 
         assert_eq!(run.id, "310011");
         assert_eq!(run.name, "train-a");
         assert_eq!(run.state, "FAILED");
+        assert_eq!(run.cpus, "12");
+        assert_eq!(run.gpus, "1");
+        assert_eq!(run.mem, "200G");
         assert_eq!(run.end, "08-28 19:56");
         assert_eq!(run.exit, "1:0");
     }
@@ -136,11 +181,34 @@ mod tests {
     #[test]
     fn drops_the_uid_from_a_cancelled_state() {
         let run = Run::parse(
-            "311750|8gpus|train-b|alice|CANCELLED by 12345|00:06:53|2026-08-29T02:58:11|0:0",
+            "311750|8gpus|train-b|alice|CANCELLED by 12345|billing=2,cpu=2,mem=16G,node=1|00:06:53|2026-08-29T02:58:11|0:0",
         )
         .expect("parsed");
 
         assert_eq!(run.state, "CANCELLED");
+    }
+
+    /// A CPU-only job has no gres/gpu entry, which has to read as "none"
+    /// rather than as a missing row.
+    #[test]
+    fn marks_a_job_that_asked_for_no_gpus() {
+        let run = Run::parse(
+            "312000|dev|cpu-only|alice|COMPLETED|billing=2,cpu=2,mem=16G,node=1|00:01:00|2026-08-29T02:58:11|0:0",
+        )
+        .expect("parsed");
+
+        assert_eq!(run.cpus, "2");
+        assert_eq!(run.gpus, "-");
+        assert_eq!(run.mem, "16G");
+    }
+
+    #[test]
+    fn converts_allocated_memory_to_gigabytes() {
+        assert_eq!(gigabytes("90000M"), "88G");
+        assert_eq!(gigabytes("200G"), "200G");
+        assert_eq!(gigabytes("2T"), "2048G");
+        // Anything it does not recognise passes through rather than vanishing.
+        assert_eq!(gigabytes("unknown"), "unknown");
     }
 
     #[test]
