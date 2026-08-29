@@ -348,7 +348,7 @@ impl App {
         self.queue
             .draw(frame, queue, "queue", focus == Focus::Queue);
         self.recent
-            .draw(frame, recent, "last 24h", focus == Focus::Recent);
+            .draw(frame, recent, "last 30d", focus == Focus::Recent);
         frame.render_widget(self.footer(), footer);
     }
 

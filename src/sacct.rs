@@ -8,8 +8,9 @@ use crate::poller::Poller;
 /// `AllocTRES` expands into the CPU, GPU and memory columns.
 const FORMAT: &str = "JobID,Partition,JobName,User,State,AllocTRES,Elapsed,End,ExitCode";
 
-/// How far back the recent view looks.
-const WINDOW: &str = "now-1days";
+/// How far back the recent view looks. Slurm's time specification understands
+/// weeks but not months, so a month is spelled out in days.
+const WINDOW: &str = "now-30days";
 
 /// How often to re-run `sacct`. Much slower than squeue: the accounting
 /// database is heavier to query and finished jobs never change again.
