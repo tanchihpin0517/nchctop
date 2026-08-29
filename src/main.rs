@@ -1,6 +1,7 @@
 mod poller;
 mod sacct;
 mod squeue;
+mod wallet;
 
 use std::io;
 use std::time::Duration;
@@ -16,6 +17,7 @@ use ratatui::{DefaultTerminal, Frame};
 use crate::poller::Poller;
 use crate::sacct::Run;
 use crate::squeue::Job;
+use crate::wallet::Project;
 
 /// A top-like view of Slurm jobs on the NCHC cluster.
 #[derive(Parser)]
@@ -105,47 +107,43 @@ fn state_style(state: &str) -> Style {
     }
 }
 
-/// One list: its rows, the background fetch feeding them, and how it is
-/// scrolled. Both panes keep their own, so moving focus does not lose your
-/// place in the other.
-struct Pane<T> {
+/// Rows from one background command, and how its last fetch went. Shared by
+/// the two job panes and the wallet header, which differ only in how they
+/// render what arrives.
+struct Feed<Req, T> {
     items: Vec<T>,
-    /// Last failure, shown in the pane title instead of the row count.
+    /// Last failure, shown in place of the row count.
     error: Option<String>,
-    /// Cleared once the first fetch comes back, so an empty list and a list we
+    /// Cleared once the first fetch comes back, so an empty result and one we
     /// have not read yet do not look the same.
     loading: bool,
     /// Dropped on quit, which stops the thread behind it.
-    poller: Poller<bool, Vec<T>>,
-    table: TableState,
-    /// Rows visible in this pane's body, measured at draw time for ctrl-d/u.
-    page: usize,
+    poller: Poller<Req, Vec<T>>,
 }
 
-impl<T: Rows> Pane<T> {
-    fn new(poller: Poller<bool, Vec<T>>) -> Self {
+impl<Req: PartialEq, T> Feed<Req, T> {
+    fn new(poller: Poller<Req, Vec<T>>) -> Self {
         Self {
             items: Vec::new(),
             error: None,
             loading: true,
             poller,
-            table: TableState::new().with_selected(0),
-            page: 0,
         }
     }
 
     /// Take whatever the poller has finished, keeping the previous rows on
-    /// screen if the command failed.
-    fn apply_updates(&mut self, scope: bool) {
+    /// screen if the command failed. Reports whether anything arrived, since
+    /// a caller holding a selection has to react.
+    fn apply_updates(&mut self, request: &Req) -> bool {
         // Collected up front so the loop below can borrow self mutably, and
         // filtered so a fetch still in flight when `m` was pressed is ignored.
         let updates: Vec<_> = self
             .poller
             .drain()
-            .filter(|(fetched, _)| *fetched == scope)
+            .filter(|(fetched, _)| fetched == request)
             .collect();
         if updates.is_empty() {
-            return;
+            return false;
         }
 
         for (_, update) in updates {
@@ -159,29 +157,55 @@ impl<T: Rows> Pane<T> {
         }
 
         self.loading = false;
-
-        // The list can shrink out from under the selection.
-        let selected = self.table.selected().unwrap_or(0);
-        self.table
-            .select(Some(selected.min(self.items.len().saturating_sub(1))));
+        true
     }
 
     /// Ask for a fresh fetch now, rather than at the next tick.
-    fn refresh(&self, scope: bool) {
-        self.poller.request(scope);
+    fn refresh(&self, request: Req) {
+        self.poller.request(request);
     }
 
-    /// How the last fetch went: an error, or how many rows came back. Lives in
-    /// the title because with two panes on screen the footer cannot say which
-    /// command a message came from.
-    fn status(&self) -> Span<'static> {
+    /// How the last fetch went: an error, or how many rows came back. Shown
+    /// next to the thing it describes, because with several commands on screen
+    /// one shared status line could not say which had failed.
+    fn status(&self, noun: &str) -> Span<'static> {
         match (&self.error, self.loading) {
             (Some(err), _) => Span::styled(err.clone(), Color::Red),
             (None, true) => Span::styled("loading", Color::DarkGray),
             (None, false) => {
-                Span::styled(format!("{} {}", self.items.len(), T::NOUN), Color::DarkGray)
+                Span::styled(format!("{} {}", self.items.len(), noun), Color::DarkGray)
             }
         }
+    }
+}
+
+/// One list: its feed, and how it is scrolled. Both panes keep their own, so
+/// moving focus does not lose your place in the other.
+struct Pane<T> {
+    feed: Feed<bool, T>,
+    table: TableState,
+    /// Rows visible in this pane's body, measured at draw time for ctrl-d/u.
+    page: usize,
+}
+
+impl<T: Rows> Pane<T> {
+    fn new(poller: Poller<bool, Vec<T>>) -> Self {
+        Self {
+            feed: Feed::new(poller),
+            table: TableState::new().with_selected(0),
+            page: 0,
+        }
+    }
+
+    fn apply_updates(&mut self, scope: bool) {
+        if !self.feed.apply_updates(&scope) {
+            return;
+        }
+
+        // The list can shrink out from under the selection.
+        let selected = self.table.selected().unwrap_or(0);
+        self.table
+            .select(Some(selected.min(self.feed.items.len().saturating_sub(1))));
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect, name: &str, focused: bool) {
@@ -190,7 +214,7 @@ impl<T: Rows> Pane<T> {
 
         let title = Line::from(vec![
             Span::raw(format!(" {name} · ")),
-            self.status(),
+            self.feed.status(T::NOUN),
             Span::raw(" "),
         ]);
 
@@ -210,7 +234,7 @@ impl<T: Rows> Pane<T> {
 
         let header = Row::new(T::COLUMNS.iter().map(|(title, _)| *title))
             .style(Style::new().add_modifier(Modifier::BOLD));
-        let rows = self.items.iter().map(T::row);
+        let rows = self.feed.items.iter().map(T::row);
         let table = Table::new(rows, T::COLUMNS.iter().map(|(_, width)| *width))
             .header(header)
             .row_highlight_style(highlight)
@@ -241,14 +265,14 @@ impl<T> Scroll for Pane<T> {
     }
 
     fn scroll_half(&mut self, down: bool) {
-        if self.items.is_empty() {
+        if self.feed.items.is_empty() {
             return;
         }
 
         let half = (self.page / 2).max(1);
         let current = self.table.selected().unwrap_or(0);
         let target = if down {
-            (current + half).min(self.items.len() - 1)
+            (current + half).min(self.feed.items.len() - 1)
         } else {
             current.saturating_sub(half)
         };
@@ -266,6 +290,7 @@ enum Focus {
 }
 
 struct App {
+    wallet: Feed<(), Project>,
     queue: Pane<Job>,
     recent: Pane<Run>,
     focus: Focus,
@@ -279,6 +304,7 @@ impl App {
         let only_me = true;
 
         Self {
+            wallet: Feed::new(wallet::poll()),
             queue: Pane::new(squeue::poll(only_me)),
             recent: Pane::new(sacct::poll(only_me)),
             focus: Focus::Queue,
@@ -289,6 +315,7 @@ impl App {
 
     fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.should_quit {
+            self.wallet.apply_updates(&());
             self.queue.apply_updates(self.only_me);
             self.recent.apply_updates(self.only_me);
             terminal.draw(|frame| self.draw(frame))?;
@@ -301,12 +328,15 @@ impl App {
     fn draw(&mut self, frame: &mut Frame) {
         // An even split: the queue is usually the shorter list, but it is also
         // the one worth watching, so neither side earns the extra rows.
-        let [queue, recent, footer] = Layout::vertical([
+        let [wallet, queue, recent, footer] = Layout::vertical([
+            Constraint::Length(1),
             Constraint::Fill(1),
             Constraint::Fill(1),
             Constraint::Length(1),
         ])
         .areas(frame.area());
+
+        frame.render_widget(self.wallet_line(), wallet);
 
         let focus = self.focus;
         self.queue
@@ -314,6 +344,33 @@ impl App {
         self.recent
             .draw(frame, recent, "last 24h", focus == Focus::Recent);
         frame.render_widget(self.footer(), footer);
+    }
+
+    /// The header: the SU balance of every project you belong to, which is the
+    /// number worth seeing before you submit anything.
+    fn wallet_line(&self) -> Line<'static> {
+        let mut spans = vec![Span::styled(" wallet", Color::DarkGray)];
+
+        if self.wallet.items.is_empty() {
+            spans.push(Span::styled(" · ", Color::DarkGray));
+            spans.push(self.wallet.status("projects"));
+            return Line::from(spans);
+        }
+
+        for project in &self.wallet.items {
+            spans.push(Span::styled(format!(" · {} ", project.id), Color::DarkGray));
+            spans.push(Span::styled(
+                format!("{:.1} SU", project.balance),
+                // An overdrawn project is the whole reason to show this line.
+                if project.balance < 0.0 {
+                    Color::Red
+                } else {
+                    Color::Green
+                },
+            ));
+        }
+
+        Line::from(spans)
     }
 
     fn footer(&self) -> Line<'static> {
@@ -340,10 +397,12 @@ impl App {
         };
     }
 
-    /// Refresh both lists; they are on screen together, so they should agree.
+    /// Refresh everything on screen; it is all shown together, so it should
+    /// agree.
     fn refresh(&self) {
-        self.queue.refresh(self.only_me);
-        self.recent.refresh(self.only_me);
+        self.wallet.refresh(());
+        self.queue.feed.refresh(self.only_me);
+        self.recent.feed.refresh(self.only_me);
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
