@@ -1,12 +1,16 @@
 #!/bin/sh
-# Install nchctop.
+# Install or update nchctop.
 #
 #   curl -LsSf https://raw.githubusercontent.com/tanchihpin0517/nchctop/main/install.sh | sh
+#
+# Run again to update: the same command replaces an existing binary, and stops
+# early when it is already the version being asked for.
 #
 # Options, which a piped run passes after `sh -s --`:
 #
 #   --version <v>   a release to install, without the leading v (default: latest)
 #   --dir <path>    where to put the binary (default: ~/.local/bin)
+#   --force         reinstall even if that version is already there
 #   --help
 #
 # The equivalent environment variables are NCHCTOP_VERSION and
@@ -19,6 +23,7 @@ ASSET="nchctop-x86_64-linux"
 
 VERSION="${NCHCTOP_VERSION:-}"
 INSTALL_DIR="${NCHCTOP_INSTALL_DIR:-}"
+FORCE=0
 
 say() {
     printf '%s\n' "$*"
@@ -33,14 +38,18 @@ err() {
 # no file to read itself from.
 usage() {
     cat <<'USAGE'
-Install nchctop.
+Install or update nchctop.
 
     curl -LsSf https://raw.githubusercontent.com/tanchihpin0517/nchctop/main/install.sh | sh
+
+Run again to update: the same command replaces an existing binary, and stops
+early when it is already the version being asked for.
 
 Options, which a piped run passes after `sh -s --`:
 
     --version <v>   a release to install, without the leading v (default: latest)
     --dir <path>    where to put the binary (default: ~/.local/bin)
+    --force         reinstall even if that version is already there
     --help
 
 The equivalent environment variables are NCHCTOP_VERSION and
@@ -59,6 +68,10 @@ while [ $# -gt 0 ]; do
             [ $# -ge 2 ] || err "--dir needs a value"
             INSTALL_DIR="$2"
             shift 2
+            ;;
+        --force)
+            FORCE=1
+            shift
             ;;
         -h | --help)
             usage
@@ -91,6 +104,25 @@ else
 fi
 
 : "${INSTALL_DIR:=$HOME/.local/bin}"
+target="$INSTALL_DIR/nchctop"
+
+# The version a binary reports, or nothing if it is missing or will not run
+# here. `nchctop --version` prints `nchctop <v>`.
+version_of() {
+    [ -x "$1" ] || return 0
+    "$1" --version 2>/dev/null | awk 'NR == 1 { print $NF }'
+}
+
+installed="$(version_of "$target")"
+if [ -n "$installed" ]; then
+    say "found nchctop $installed in $INSTALL_DIR"
+fi
+
+# A pinned version already in place needs no download at all.
+if [ -n "$VERSION" ] && [ "$installed" = "${VERSION#v}" ] && [ "$FORCE" -eq 0 ]; then
+    say "already at $installed, nothing to do (--force to reinstall)"
+    exit 0
+fi
 
 if command -v curl >/dev/null 2>&1; then
     fetch() { curl -LsSf --proto '=https' --tlsv1.2 "$1" -o "$2"; }
@@ -129,14 +161,40 @@ else
 fi
 
 chmod +x "$tmp/nchctop"
+
+# Asking the download its version is also the check that it runs here, so a
+# binary that cannot start never displaces a working one.
+downloaded="$(version_of "$tmp/nchctop")"
+[ -n "$downloaded" ] || err "the downloaded binary does not run on this machine; install from source with: cargo install --git https://github.com/$REPO"
+
+if [ "$installed" = "$downloaded" ] && [ "$FORCE" -eq 0 ]; then
+    say "already at $installed, nothing to do (--force to reinstall)"
+    exit 0
+fi
+
 mkdir -p "$INSTALL_DIR"
 # Replace by rename, so a running nchctop keeps the file it started from.
-mv -f "$tmp/nchctop" "$INSTALL_DIR/nchctop"
+mv -f "$tmp/nchctop" "$target"
 
-say "installed $("$INSTALL_DIR/nchctop" --version) to $INSTALL_DIR/nchctop"
+if [ "$installed" = "$downloaded" ]; then
+    say "reinstalled nchctop $downloaded in $INSTALL_DIR"
+elif [ -n "$installed" ]; then
+    say "updated nchctop $installed -> $downloaded in $INSTALL_DIR"
+else
+    say "installed nchctop $downloaded to $target"
+fi
 
 case ":$PATH:" in
-    *":$INSTALL_DIR:"*) ;;
+    *":$INSTALL_DIR:"*)
+        # Installing into a directory that PATH reaches second leaves the old
+        # binary answering, which otherwise looks like an update that did
+        # nothing.
+        found="$(command -v nchctop || true)"
+        if [ -n "$found" ] && [ "$found" != "$target" ]; then
+            say ""
+            say "note: $found comes first on your PATH, so it is the one that runs."
+        fi
+        ;;
     *)
         say ""
         say "$INSTALL_DIR is not on your PATH. To add it:"

@@ -18,6 +18,10 @@ script is given arguments:
 `NCHCTOP_INSTALL_DIR` and `NCHCTOP_VERSION` do the same, and `--help` lists
 everything.
 
+To update, run the same command again: it replaces the binary in place, reports
+the version it moved from, and stops without downloading twice when you already
+have the release it would install. `--force` reinstalls anyway.
+
 Or, from source:
 
     cargo install --git https://github.com/tanchihpin0517/nchctop
