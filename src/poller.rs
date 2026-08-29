@@ -22,17 +22,19 @@ pub struct Poller<Req, Out> {
     results: Receiver<(Req, io::Result<Out>)>,
 }
 
-impl<Req, Out> Poller<Req, Out>
-where
-    Req: Clone + Send + 'static,
-    Out: Send + 'static,
-{
+impl<Req, Out> Poller<Req, Out> {
     /// Start polling every `interval`, with one fetch straight away.
     ///
     /// The interval is the gap *between* fetches, not the period: a slow
     /// command backs itself off instead of piling up overlapping runs.
+    ///
+    /// Only spawning needs anything of `Req` and `Out`; holding a `Poller` and
+    /// reading from it does not, so a caller generic over the row type is not
+    /// forced to repeat these bounds.
     pub fn spawn<F>(interval: Duration, initial: Req, fetch: F) -> Self
     where
+        Req: Clone + Send + 'static,
+        Out: Send + 'static,
         F: Fn(Req) -> io::Result<Out> + Send + 'static,
     {
         let (requests, incoming) = mpsc::channel();
