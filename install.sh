@@ -78,7 +78,7 @@ while [ $# -gt 0 ]; do
             exit 0
             ;;
         *)
-            err "unknown option: $1 (try --help)"
+            err "Unknown option: $1 (try --help)"
             ;;
     esac
 done
@@ -88,11 +88,11 @@ done
 os="$(uname -s)"
 arch="$(uname -m)"
 
-[ "$os" = "Linux" ] || err "no build for $os; install from source with: cargo install --git https://github.com/$REPO"
+[ "$os" = "Linux" ] || err "No build for $os; install from source with: cargo install --git https://github.com/$REPO"
 
 case "$arch" in
     x86_64 | amd64) ;;
-    *) err "no build for $arch; install from source with: cargo install --git https://github.com/$REPO" ;;
+    *) err "No build for $arch; install from source with: cargo install --git https://github.com/$REPO" ;;
 esac
 
 if [ -n "$VERSION" ]; then
@@ -106,6 +106,21 @@ fi
 : "${INSTALL_DIR:=$HOME/.local/bin}"
 target="$INSTALL_DIR/nchctop"
 
+if command -v curl >/dev/null 2>&1; then
+    fetch() { curl -LsSf --proto '=https' --tlsv1.2 "$1" -o "$2"; }
+    # Headers alone, redirects followed: the answer is the address we end up
+    # at, not anything in the body.
+    redirect() { curl -sIL --proto '=https' --tlsv1.2 -o /dev/null -w '%{url_effective}' "$1"; }
+elif command -v wget >/dev/null 2>&1; then
+    fetch() { wget -q "$1" -O "$2"; }
+    redirect() {
+        wget -qS --spider --max-redirect=0 "$1" 2>&1 |
+            awk 'tolower($1) == "location:" { sub(/\r$/, "", $2); print $2 }'
+    }
+else
+    err "Neither curl nor wget is available"
+fi
+
 # The version a binary reports, or nothing if it is missing or will not run
 # here. `nchctop --version` prints `nchctop <v>`.
 version_of() {
@@ -113,23 +128,35 @@ version_of() {
     "$1" --version 2>/dev/null | awk 'NR == 1 { print $NF }'
 }
 
+# The version of the latest release, taken from the tag that
+# /releases/latest redirects to. Nothing depends on knowing it: when it cannot
+# be worked out the download below settles the same question, a few megabytes
+# later.
+latest_version() {
+    url="$(redirect "https://github.com/$REPO/releases/latest")" || return 0
+
+    case "$url" in
+        */releases/tag/v*) printf '%s\n' "${url##*/tag/v}" ;;
+    esac
+}
+
 installed="$(version_of "$target")"
 if [ -n "$installed" ]; then
-    say "found nchctop $installed in $INSTALL_DIR"
+    say "Found nchctop $installed in $INSTALL_DIR"
 fi
 
-# A pinned version already in place needs no download at all.
-if [ -n "$VERSION" ] && [ "$installed" = "${VERSION#v}" ] && [ "$FORCE" -eq 0 ]; then
-    say "already at $installed, nothing to do (--force to reinstall)"
-    exit 0
-fi
-
-if command -v curl >/dev/null 2>&1; then
-    fetch() { curl -LsSf --proto '=https' --tlsv1.2 "$1" -o "$2"; }
-elif command -v wget >/dev/null 2>&1; then
-    fetch() { wget -q "$1" -O "$2"; }
+# Which release we would install, asked for by name rather than downloaded: a
+# tag costs a header, the binary costs megabytes. Worth doing on every run,
+# because the update check on startup is one of these.
+if [ -n "$VERSION" ]; then
+    want="${VERSION#v}"
 else
-    err "neither curl nor wget is available"
+    want="$(latest_version)"
+fi
+
+if [ -n "$want" ] && [ "$installed" = "$want" ] && [ "$FORCE" -eq 0 ]; then
+    say "Already at $installed, nothing to do (--force to reinstall)"
+    exit 0
 fi
 
 if command -v sha256sum >/dev/null 2>&1; then
@@ -143,21 +170,21 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-say "downloading $ASSET from $base"
-fetch "$base/$ASSET" "$tmp/nchctop" || err "could not download $base/$ASSET"
+say "Downloading $ASSET from $base"
+fetch "$base/$ASSET" "$tmp/nchctop" || err "Could not download $base/$ASSET"
 
 # A missing checksum is not fatal — older releases may not carry one — but a
 # checksum that disagrees is.
 if fetch "$base/$ASSET.sha256" "$tmp/sum" 2>/dev/null; then
     want="$(cut -d' ' -f1 <"$tmp/sum")"
     if got="$(sha256 "$tmp/nchctop")"; then
-        [ "$want" = "$got" ] || err "checksum mismatch: expected $want, got $got"
-        say "checksum ok"
+        [ "$want" = "$got" ] || err "Checksum mismatch: expected $want, got $got"
+        say "Checksum ok"
     else
-        say "no sha256 tool available, skipping the checksum"
+        say "No sha256 tool available, skipping the checksum"
     fi
 else
-    say "no published checksum, skipping the check"
+    say "No published checksum, skipping the check"
 fi
 
 chmod +x "$tmp/nchctop"
@@ -165,10 +192,10 @@ chmod +x "$tmp/nchctop"
 # Asking the download its version is also the check that it runs here, so a
 # binary that cannot start never displaces a working one.
 downloaded="$(version_of "$tmp/nchctop")"
-[ -n "$downloaded" ] || err "the downloaded binary does not run on this machine; install from source with: cargo install --git https://github.com/$REPO"
+[ -n "$downloaded" ] || err "The downloaded binary does not run on this machine; install from source with: cargo install --git https://github.com/$REPO"
 
 if [ "$installed" = "$downloaded" ] && [ "$FORCE" -eq 0 ]; then
-    say "already at $installed, nothing to do (--force to reinstall)"
+    say "Already at $installed, nothing to do (--force to reinstall)"
     exit 0
 fi
 
@@ -177,11 +204,11 @@ mkdir -p "$INSTALL_DIR"
 mv -f "$tmp/nchctop" "$target"
 
 if [ "$installed" = "$downloaded" ]; then
-    say "reinstalled nchctop $downloaded in $INSTALL_DIR"
+    say "Reinstalled nchctop $downloaded in $INSTALL_DIR"
 elif [ -n "$installed" ]; then
-    say "updated nchctop $installed -> $downloaded in $INSTALL_DIR"
+    say "Updated nchctop $installed -> $downloaded in $INSTALL_DIR"
 else
-    say "installed nchctop $downloaded to $target"
+    say "Installed nchctop $downloaded to $target"
 fi
 
 case ":$PATH:" in
@@ -192,7 +219,7 @@ case ":$PATH:" in
         found="$(command -v nchctop || true)"
         if [ -n "$found" ] && [ "$found" != "$target" ]; then
             say ""
-            say "note: $found comes first on your PATH, so it is the one that runs."
+            say "Note: $found comes first on your PATH, so it is the one that runs."
         fi
         ;;
     *)

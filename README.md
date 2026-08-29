@@ -18,9 +18,26 @@ script is given arguments:
 `NCHCTOP_INSTALL_DIR` and `NCHCTOP_VERSION` do the same, and `--help` lists
 everything.
 
-To update, run the same command again: it replaces the binary in place, reports
-the version it moved from, and stops without downloading twice when you already
-have the release it would install. `--force` reinstalls anyway.
+nchctop keeps itself current: each start runs that same script in the
+background, against the directory the running binary is in. The script is built
+into the binary rather than fetched, so an update runs only code that shipped
+with it, and it asks which release is latest — the tag `/releases/latest`
+redirects to — before deciding to download one, so the usual start costs a
+header rather than a binary. The screen opens straight away and the session carries on as the
+version it started as; when a newer release lands, the footer says so and the
+next start picks it up. Failures — an offline node, a directory you cannot
+write — are a note in the footer and nothing more. `nchctop --no-update` skips
+the check.
+
+To update on demand, without opening the screen:
+
+    nchctop update
+
+That runs the same script in the foreground, so you see what it did and get a
+non-zero exit if it could not. Running the `curl` line again does the same from
+outside. Either way it replaces the binary in place, reports the version it
+moved from, and stops without downloading twice when you already have the
+release it would install; `--force` reinstalls anyway.
 
 Or, from source:
 

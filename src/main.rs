@@ -3,6 +3,7 @@ mod poller;
 mod sacct;
 mod squeue;
 mod tres;
+mod update;
 mod wallet;
 
 use std::io;
@@ -10,7 +11,7 @@ use std::ops::Range;
 use std::time::Duration;
 
 use chrono::Local;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -21,12 +22,26 @@ use ratatui::{DefaultTerminal, Frame};
 use crate::poller::Poller;
 use crate::sacct::Run;
 use crate::squeue::Job;
+use crate::update::Outcome;
 use crate::wallet::Project;
 
 /// A top-like view of Slurm jobs on NCHC clusters.
 #[derive(Parser)]
 #[command(version, about)]
-struct Cli {}
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    /// Do not check for a newer release at startup.
+    #[arg(long)]
+    no_update: bool,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Install the latest release and exit, without opening the screen.
+    Update,
+}
 
 /// How long to wait for input before looking at the pollers again. Also the
 /// longest a finished fetch can sit in a channel before it reaches the screen.
@@ -364,11 +379,13 @@ struct App {
     focus: Focus,
     /// Whether to ask both commands for only the current user's jobs.
     only_me: bool,
+    /// The startup update check, which reports into the footer.
+    update: update::Check,
     should_quit: bool,
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(check_update: bool) -> Self {
         let only_me = true;
 
         Self {
@@ -378,6 +395,11 @@ impl App {
             costs: [0.0; cost::WINDOWS.len()],
             focus: Focus::Queue,
             only_me,
+            update: if check_update {
+                update::Check::start()
+            } else {
+                update::Check::idle()
+            },
             should_quit: false,
         }
     }
@@ -394,6 +416,7 @@ impl App {
         while !self.should_quit {
             // Drained every pass, dirty or not: a result left sitting in a
             // channel is a pane showing something stale.
+            dirty |= self.update.apply_update();
             dirty |= self.wallet.apply_updates(&());
             dirty |= self.queue.apply_updates(self.only_me);
             if self.recent.apply_updates(self.only_me) {
@@ -429,7 +452,46 @@ impl App {
             .draw(frame, queue, "queue", focus == Focus::Queue);
         self.recent
             .draw(frame, recent, "last 30d", focus == Focus::Recent);
-        frame.render_widget(self.footer(), footer);
+        self.draw_footer(frame, footer);
+    }
+
+    /// The footer: the keys on the left, what the update check came to on the
+    /// right. The note is dropped rather than shortened when the terminal is
+    /// narrow, because the keys are what you are down here to read.
+    fn draw_footer(&self, frame: &mut Frame, area: Rect) {
+        let keys = self.footer();
+        let note = self.update_note();
+
+        let room = usize::from(area.width).saturating_sub(keys.width());
+        let width = if note.width() <= room {
+            u16::try_from(note.width()).unwrap_or(0)
+        } else {
+            0
+        };
+
+        let [keys_area, note_area] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(width)]).areas(area);
+
+        frame.render_widget(keys, keys_area);
+        frame.render_widget(note.right_aligned(), note_area);
+    }
+
+    /// What the update check came to, once it has anything to say. A finished
+    /// update is a note and not a prompt: the binary on disk is already the
+    /// new one, and this session carries on as the old one.
+    fn update_note(&self) -> Line<'static> {
+        match self.update.outcome() {
+            // Nothing yet, or nothing worth a line: being current is the
+            // usual case, and saying so every start is noise.
+            None | Some(Outcome::Current) => Line::default(),
+            Some(Outcome::Installed(version)) => Line::from(vec![
+                Span::styled(format!("updated to {version}"), Color::Green),
+                Span::styled(" · restart to use it ", Color::DarkGray),
+            ]),
+            Some(Outcome::Failed(reason)) => {
+                Line::styled(format!("update · {reason} "), Color::DarkGray)
+            }
+        }
     }
 
     /// The header: balances on the left, what they have been spent on to the
@@ -634,9 +696,15 @@ impl App {
 }
 
 fn main() -> io::Result<()> {
-    let _cli = Cli::parse();
+    let cli = Cli::parse();
 
-    ratatui::run(|terminal| App::new().run(terminal))
+    if let Some(Command::Update) = cli.command {
+        // The installer has already said how it went, so all that is left to
+        // pass on is whether it worked.
+        std::process::exit(i32::from(!update::run()?));
+    }
+
+    ratatui::run(|terminal| App::new(!cli.no_update).run(terminal))
 }
 
 #[cfg(test)]
