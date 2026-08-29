@@ -23,7 +23,7 @@ use crate::sacct::Run;
 use crate::squeue::Job;
 use crate::wallet::Project;
 
-/// A top-like view of Slurm jobs on the NCHC cluster.
+/// A top-like view of Slurm jobs on NCHC clusters.
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {}

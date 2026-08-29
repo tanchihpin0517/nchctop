@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Statically linked, so one binary runs on any x86-64 Linux regardless of
+  # how old the cluster's glibc is.
+  TARGET: x86_64-unknown-linux-musl
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build and upload
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check the tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          crate=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$crate" != "$tag" ]; then
+            echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $crate" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: cargo build --release --locked --target "$TARGET"
+
+      - name: Package
+        run: |
+          mkdir dist
+          cp "target/$TARGET/release/nchctop" "dist/nchctop-x86_64-linux"
+          cd dist
+          sha256sum nchctop-x86_64-linux > nchctop-x86_64-linux.sha256
+          # Alongside the binary so a release can be installed by a script
+          # pinned to it, not only by whatever is on main.
+          cp ../install.sh .
+
+      - name: Upload to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/nchctop-x86_64-linux
+            dist/nchctop-x86_64-linux.sha256
+            dist/install.sh
+          generate_release_notes: true
+
+      - name: Upload as an artifact
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: nchctop-x86_64-linux
+          path: dist/

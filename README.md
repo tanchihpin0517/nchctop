@@ -1,6 +1,26 @@
 # nchctop
 
-A top-like terminal view of Slurm jobs, built for the NCHC nano4 cluster.
+A top-like terminal view of Slurm jobs, built for NCHC clusters.
+
+## Install
+
+    curl -LsSf https://raw.githubusercontent.com/tanchihpin0517/nchctop/main/install.sh | sh
+
+That drops a statically linked binary in `~/.local/bin`, so a login node with no
+Rust toolchain and an old glibc still runs it. The script checks the published
+sha256, and says so if `~/.local/bin` is not on your `PATH`.
+
+Somewhere else, or an older release — note the `-s --`, which is how a piped
+script is given arguments:
+
+    curl -LsSf https://raw.githubusercontent.com/tanchihpin0517/nchctop/main/install.sh | sh -s -- --dir ~/bin --version 0.1.0
+
+`NCHCTOP_INSTALL_DIR` and `NCHCTOP_VERSION` do the same, and `--help` lists
+everything.
+
+Or, from source:
+
+    cargo install --git https://github.com/tanchihpin0517/nchctop
 
 ## Refresh
 
@@ -44,3 +64,7 @@ Inspired by:
 
 - **turm** — a Slurm TUI that polls `squeue` every two seconds.
 - **slurmtop** — a terminal dashboard for Slurm clusters.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

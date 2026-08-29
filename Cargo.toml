@@ -2,8 +2,20 @@
 name = "nchctop"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+authors = ["Chih-Pin Tan <tanchihpin0517@gmail.com>"]
+description = "A top-like terminal view of Slurm jobs, built for NCHC clusters."
+readme = "README.md"
+repository = "https://github.com/tanchihpin0517/nchctop"
+license = "Apache-2.0"
+keywords = ["slurm", "hpc", "tui", "squeue", "cluster"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 clap = { version = "4.6.6", features = ["derive"] }
 ratatui = "0.30.2"
+
+[profile.release]
+# Released binaries are downloaded, not debugged.
+strip = true
