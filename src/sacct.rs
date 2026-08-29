@@ -3,6 +3,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::poller::Poller;
+use crate::tres;
 
 /// The sacct fields we ask for, in the order the table renders them.
 /// `AllocTRES` expands into the CPU, GPU and memory columns.
@@ -43,7 +44,7 @@ impl Run {
 
         // A job that asked for no GPUs has no gres/gpu entry at all, rather
         // than a zero.
-        let resource = |key| tres_value(tres, key).unwrap_or("-").to_string();
+        let resource = |key| tres::value(tres, key).unwrap_or("-").to_string();
 
         Some(Self {
             id: id.trim().to_string(),
@@ -53,42 +54,12 @@ impl Run {
             state: state_name(state.trim()),
             cpus: resource("cpu"),
             gpus: resource("gres/gpu"),
-            mem: tres_value(tres, "mem").map_or("-".to_string(), gigabytes),
+            mem: tres::value(tres, "mem").map_or("-".to_string(), tres::gigabytes),
             elapsed: elapsed.trim().to_string(),
             end: short_time(end.trim()),
             exit: exit.trim().to_string(),
         })
     }
-}
-
-/// Pull one value out of a TRES list such as
-/// `billing=12,cpu=12,gres/gpu=1,mem=200G,node=1`.
-fn tres_value<'a>(spec: &'a str, key: &str) -> Option<&'a str> {
-    spec.split(',')
-        .filter_map(|entry| entry.split_once('='))
-        .find(|(name, _)| *name == key)
-        .map(|(_, value)| value)
-}
-
-/// A job is allocated memory in whatever unit it asked in, so put them all in
-/// gigabytes and let the column compare like with like.
-fn gigabytes(mem: &str) -> String {
-    let Some((value, unit)) = mem.split_at_checked(mem.len().saturating_sub(1)) else {
-        return mem.to_string();
-    };
-    let Ok(value) = value.parse::<f64>() else {
-        return mem.to_string();
-    };
-
-    let gb = match unit {
-        "K" => value / (1024.0 * 1024.0),
-        "M" => value / 1024.0,
-        "G" => value,
-        "T" => value * 1024.0,
-        _ => return mem.to_string(),
-    };
-
-    format!("{}G", gb.round())
 }
 
 /// Slurm reports a cancelled job as `CANCELLED by 12345`. The uid that did it
@@ -201,15 +172,6 @@ mod tests {
         assert_eq!(run.cpus, "2");
         assert_eq!(run.gpus, "-");
         assert_eq!(run.mem, "16G");
-    }
-
-    #[test]
-    fn converts_allocated_memory_to_gigabytes() {
-        assert_eq!(gigabytes("90000M"), "88G");
-        assert_eq!(gigabytes("200G"), "200G");
-        assert_eq!(gigabytes("2T"), "2048G");
-        // Anything it does not recognise passes through rather than vanishing.
-        assert_eq!(gigabytes("unknown"), "unknown");
     }
 
     #[test]

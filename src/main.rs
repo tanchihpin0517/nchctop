@@ -1,6 +1,7 @@
 mod poller;
 mod sacct;
 mod squeue;
+mod tres;
 mod wallet;
 
 use std::io;
@@ -43,9 +44,12 @@ impl Rows for Job {
     const COLUMNS: &'static [(&'static str, Constraint)] = &[
         ("JOBID", Constraint::Length(8)),
         ("PARTITION", Constraint::Length(9)),
-        ("NAME", Constraint::Min(16)),
-        ("USER", Constraint::Length(10)),
+        ("NAME", Constraint::Min(14)),
+        ("USER", Constraint::Length(9)),
         ("STATE", Constraint::Length(9)),
+        ("CPU", Constraint::Length(4)),
+        ("GPU", Constraint::Length(3)),
+        ("MEM", Constraint::Length(6)),
         ("TIME", Constraint::Length(10)),
         ("NODES", Constraint::Length(5)),
         ("NODELIST(REASON)", Constraint::Min(18)),
@@ -60,6 +64,9 @@ impl Rows for Job {
             Line::raw(&self.name),
             Line::raw(&self.user),
             Line::styled(&self.state, state_style(&self.state)),
+            Line::raw(&self.cpus),
+            Line::raw(&self.gpus),
+            Line::raw(&self.mem),
             Line::raw(&self.time),
             Line::raw(&self.nodes),
             Line::raw(&self.reason),
