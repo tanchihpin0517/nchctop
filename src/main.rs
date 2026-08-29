@@ -40,7 +40,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Install the latest release and exit, without opening the screen.
-    Update,
+    Update {
+        /// Install it even when it is the version already here.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// How long to wait for input before looking at the pollers again. Also the
@@ -698,10 +702,10 @@ impl App {
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
-    if let Some(Command::Update) = cli.command {
+    if let Some(Command::Update { force }) = cli.command {
         // The installer has already said how it went, so all that is left to
         // pass on is whether it worked.
-        std::process::exit(i32::from(!update::run()?));
+        std::process::exit(i32::from(!update::run(force)?));
     }
 
     ratatui::run(|terminal| App::new(!cli.no_update).run(terminal))

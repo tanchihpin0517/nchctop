@@ -90,10 +90,16 @@ impl Check {
 /// whether it worked. This is `nchctop update`: the same script the startup
 /// check runs, in the foreground, where watching it is the point.
 ///
+/// `force` installs the release even when it is the one already here, which
+/// also covers the two cases the script otherwise declines: a binary that
+/// reports a version newer than the latest release, and one that will not run
+/// well enough to report any version at all.
+///
 /// Unlike the startup check this updates a development build too — typing the
 /// command is asking for it.
-pub fn run() -> io::Result<bool> {
-    let status = run_installer(&install_dir()?, Stdio::inherit(), Stdio::inherit())?;
+pub fn run(force: bool) -> io::Result<bool> {
+    let args: &[&str] = if force { &["--force"] } else { &[] };
+    let status = run_installer(&install_dir()?, args, Stdio::inherit(), Stdio::inherit())?;
 
     // The script has already said what went wrong, in more detail than a
     // summary line here could add.
@@ -110,7 +116,7 @@ fn update() -> io::Result<Option<String>> {
     }
 
     let dir = install_dir()?;
-    let finished = run_installer(&dir, Stdio::null(), Stdio::piped())?;
+    let finished = run_installer(&dir, &[], Stdio::null(), Stdio::piped())?;
     if !finished.status.success() {
         return Err(io::Error::other(reason(&finished.stderr)));
     }
@@ -131,13 +137,18 @@ fn install_dir() -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::other("No directory to install into"))
 }
 
-/// Run the installer against `dir`, with its two output streams wherever the
-/// caller wants them.
-fn run_installer(dir: &Path, stdout: Stdio, stderr: Stdio) -> io::Result<Output> {
+/// Run the installer against `dir` with `args`, and its two output streams
+/// wherever the caller wants them.
+fn run_installer(dir: &Path, args: &[&str], stdout: Stdio, stderr: Stdio) -> io::Result<Output> {
     // Fed over stdin rather than written out and run, so there is no temporary
-    // file to clean up or to race. The directory goes through the environment,
-    // which spares us quoting a path into a command line.
+    // file to clean up or to race. `-s --` is what makes sh read the script
+    // from stdin and hand the rest to it, the same way the piped install line
+    // in the README does. The directory goes through the environment, which
+    // spares us quoting a path into a command line.
     let mut sh = Command::new("sh")
+        .arg("-s")
+        .arg("--")
+        .args(args)
         .env("NCHCTOP_INSTALL_DIR", dir)
         .stdin(Stdio::piped())
         .stdout(stdout)

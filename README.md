@@ -34,7 +34,9 @@ To update on demand, without opening the screen:
     nchctop update
 
 That runs the same script in the foreground, so you see what it did and get a
-non-zero exit if it could not. Running the `curl` line again does the same from
+non-zero exit if it could not. `nchctop update --force` installs the release
+even when it is the one already here, which is the way past a binary that is
+somehow ahead of the latest release, or too broken to say what version it is. Running the `curl` line again does the same from
 outside. Either way it replaces the binary in place, reports the version it
 moved from, and stops without downloading twice when you already have the
 release it would install; `--force` reinstalls anyway.
