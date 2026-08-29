@@ -16,6 +16,28 @@ The interval is the gap between fetches rather than a fixed period: a command
 that takes a while to return backs itself off instead of piling up overlapping
 runs.
 
+## Cost
+
+The right of the header totals what the recent jobs cost, over the last day,
+week and month:
+
+    wallet · MST000000 12345.6 SU        cost · 1d 147.7 SU · 7d 267.9 SU · 30d 267.9 SU
+
+The balances are measured out first, so a terminal too narrow for both drops the
+longest window rather than crowding them: `30d` goes, then `7d`, then the total
+altogether.
+
+A job is charged **30 SU per GPU-hour** — its GPUs held for as long as it ran,
+with a job still going counted for the time it has run so far. A job lands in a
+window by when it started, matching how `sacct` was asked for the list, so a
+long job that straddles a boundary counts whole in the windows containing its
+start.
+
+This is an estimate, not the ledger. A job that asked for no GPUs bills against
+a rate this does not model and shows as free, and `m` widens the total to every
+user's jobs along with the panes. `wallet` remains the authority on what has
+actually been charged.
+
 ## Credits
 
 Inspired by:

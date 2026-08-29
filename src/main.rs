@@ -1,3 +1,4 @@
+mod cost;
 mod poller;
 mod sacct;
 mod squeue;
@@ -8,6 +9,7 @@ use std::io;
 use std::ops::Range;
 use std::time::Duration;
 
+use chrono::Local;
 use clap::Parser;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -354,6 +356,11 @@ struct App {
     wallet: Feed<(), Project>,
     queue: Pane<Job>,
     recent: Pane<Run>,
+    /// What the recent runs cost, over each of [`cost::WINDOWS`]. Totalled when
+    /// a fetch lands rather than when the line is drawn: a month of everyone's
+    /// jobs is tens of thousands of rows, and holding `j` must not re-add them
+    /// all for every frame.
+    costs: [f64; cost::WINDOWS.len()],
     focus: Focus,
     /// Whether to ask both commands for only the current user's jobs.
     only_me: bool,
@@ -368,6 +375,7 @@ impl App {
             wallet: Feed::new(wallet::poll()),
             queue: Pane::new(squeue::poll(only_me)),
             recent: Pane::new(sacct::poll(only_me)),
+            costs: [0.0; cost::WINDOWS.len()],
             focus: Focus::Queue,
             only_me,
             should_quit: false,
@@ -388,7 +396,10 @@ impl App {
             // channel is a pane showing something stale.
             dirty |= self.wallet.apply_updates(&());
             dirty |= self.queue.apply_updates(self.only_me);
-            dirty |= self.recent.apply_updates(self.only_me);
+            if self.recent.apply_updates(self.only_me) {
+                self.costs = cost::totals(&self.recent.feed.items, Local::now().naive_local());
+                dirty = true;
+            }
 
             if dirty {
                 terminal.draw(|frame| self.draw(frame))?;
@@ -403,7 +414,7 @@ impl App {
     fn draw(&mut self, frame: &mut Frame) {
         // An even split: the queue is usually the shorter list, but it is also
         // the one worth watching, so neither side earns the extra rows.
-        let [wallet, queue, recent, footer] = Layout::vertical([
+        let [header, queue, recent, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Fill(1),
             Constraint::Fill(1),
@@ -411,7 +422,7 @@ impl App {
         ])
         .areas(frame.area());
 
-        frame.render_widget(self.wallet_line(), wallet);
+        self.draw_header(frame, header);
 
         let focus = self.focus;
         self.queue
@@ -421,8 +432,32 @@ impl App {
         frame.render_widget(self.footer(), footer);
     }
 
-    /// The header: the SU balance of every project you belong to, which is the
-    /// number worth seeing before you submit anything.
+    /// The header: balances on the left, what they have been spent on to the
+    /// right. One line for both, so the panes keep the row.
+    fn draw_header(&self, frame: &mut Frame, area: Rect) {
+        let wallet = self.wallet_line();
+
+        // The balance is what you would still want to see on a terminal too
+        // narrow for both, so it is measured out first and the cost takes
+        // whatever is left over.
+        let width = u16::try_from(wallet.width()).unwrap_or(u16::MAX);
+        let [balances, costs] =
+            Layout::horizontal([Constraint::Length(width), Constraint::Fill(1)]).areas(area);
+
+        frame.render_widget(wallet, balances);
+
+        // A right-aligned line that does not fit is truncated from its left,
+        // which would leave a fragment of a total sitting against the
+        // balances. Better to show one window fewer, or none at all.
+        let room = usize::from(costs.width);
+        let cost = self.cost_line(room);
+        if cost.width() <= room {
+            frame.render_widget(cost.right_aligned(), costs);
+        }
+    }
+
+    /// The SU balance of every project you belong to, which is the number worth
+    /// seeing before you submit anything.
     fn wallet_line(&self) -> Line<'static> {
         let mut spans = vec![Span::styled(" wallet", Color::DarkGray)];
 
@@ -445,6 +480,54 @@ impl App {
             ));
         }
 
+        Line::from(spans)
+    }
+
+    /// What the recent runs have cost, over as many of the windows as `width`
+    /// has room for. The balances say what is left; this says how fast it is
+    /// going.
+    fn cost_line(&self, width: usize) -> Line<'static> {
+        const LABEL: &str = "cost";
+
+        let mut spans = vec![Span::styled(LABEL, Color::DarkGray)];
+
+        if self.recent.feed.loading {
+            // Zeroes before the first fetch would read as a month of free
+            // compute.
+            spans.push(Span::styled(" · loading", Color::DarkGray));
+        } else {
+            // One column of it goes to the margin below.
+            let mut room = width.saturating_sub(LABEL.len() + 1);
+            let mut windows = Vec::new();
+
+            for (days, total) in cost::WINDOWS.iter().zip(self.costs) {
+                let window = format!(" · {days}d ");
+                let amount = format!("{total:.1} SU");
+
+                // A window that does not fit is dropped whole, longest first:
+                // half a number still reads as a number, and every window left
+                // is still labelled with the days it covers.
+                let Some(left) = room.checked_sub(window.len() + amount.len()) else {
+                    break;
+                };
+                room = left;
+
+                windows.push(Span::styled(window, Color::DarkGray));
+                windows.push(Span::raw(amount));
+            }
+
+            // Not even one window fits, and a label with no total beside it is
+            // not worth the columns it would take from the balances.
+            if windows.is_empty() {
+                return Line::default();
+            }
+
+            spans.extend(windows);
+        }
+
+        // Right-aligned, so the margin that keeps this off the edge goes on the
+        // opposite end from the wallet's.
+        spans.push(Span::raw(" "));
         Line::from(spans)
     }
 
