@@ -61,6 +61,27 @@ The interval is the gap between fetches rather than a fixed period: a command
 that takes a while to return backs itself off instead of piling up overlapping
 runs.
 
+## Cancel
+
+`d` twice on a queue row cancels that job. The first press asks, in the footer:
+
+    d again to cancel job 308208 · anything else, or a pause, keeps it
+
+The second press, within a second, answers it — anything else, or letting the
+second pass, keeps the job. `d` sits next to `j` and `k`, so one press on its
+own never does anything, and the question expires rather than waiting in the
+footer for a `d` you meant as the start of a new pair.
+
+The job id is read when the question is asked, not when it is answered, so a
+refresh landing between the two presses cannot slide a different job under the
+cursor and have that one cancelled instead. `scancel` runs on its own thread
+like every other cluster command here, and the footer reports what it came to:
+a job Slurm took, or why it did not. The queue pane is the confirmation — the
+job leaves it a fetch later, on Slurm's own time.
+
+The other pane is jobs that have already ended, so `d` does nothing there, and
+the footer drops the key while it has focus.
+
 ## Cost
 
 The right of the header totals what the recent jobs cost, over the last day,

@@ -1,6 +1,7 @@
 mod cost;
 mod poller;
 mod sacct;
+mod scancel;
 mod squeue;
 mod tres;
 mod update;
@@ -8,7 +9,7 @@ mod wallet;
 
 use std::io;
 use std::ops::Range;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Local;
 use clap::{Parser, Subcommand};
@@ -21,6 +22,7 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::poller::Poller;
 use crate::sacct::Run;
+use crate::scancel::Cancels;
 use crate::squeue::Job;
 use crate::update::Outcome;
 use crate::wallet::Project;
@@ -50,6 +52,11 @@ enum Command {
 /// How long to wait for input before looking at the pollers again. Also the
 /// longest a finished fetch can sit in a channel before it reaches the screen.
 const TICK: Duration = Duration::from_millis(100);
+
+/// How long the first `d` waits for the second. Long enough to be a double
+/// press, short enough that a `d` you have since forgotten about cannot be
+/// answered by one you meant as the first of a pair.
+const CONFIRM: Duration = Duration::from_secs(1);
 
 /// Something that renders as a table row.
 trait Rows {
@@ -371,6 +378,40 @@ enum Focus {
     Recent,
 }
 
+/// What the footer is saying about a cancellation, in place of the keys.
+///
+/// A confirmation rather than a key that acts on its own: `d` sits next to the
+/// movement keys, and one stray press must not take a job down with it.
+enum Prompt {
+    /// The first `d`: the next key, within [`CONFIRM`], decides.
+    ///
+    /// The job id is read when the prompt is armed rather than when it is
+    /// answered, so a queue that refreshes between the two presses cannot slide
+    /// a different job under the cursor and have it cancelled instead.
+    Confirm(String, Instant),
+    /// `scancel` asked for, and not yet back.
+    Sent(String),
+    /// Slurm took it. The job leaves the queue on its own time, so this says
+    /// what was asked rather than that the job is gone.
+    Done(String),
+    /// It did not, and why — the whole reason a result is reported at all.
+    Failed(String),
+}
+
+impl Prompt {
+    fn line(&self) -> Line<'static> {
+        match self {
+            Self::Confirm(id, _) => Line::from(vec![
+                Span::styled(format!(" d again to cancel job {id}"), Color::Yellow),
+                Span::styled(" · anything else, or a pause, keeps it", Color::DarkGray),
+            ]),
+            Self::Sent(id) => Line::styled(format!(" cancelling {id} …"), Color::DarkGray),
+            Self::Done(id) => Line::styled(format!(" cancelled {id}"), Color::Green),
+            Self::Failed(err) => Line::styled(format!(" cancel · {err}"), Color::Red),
+        }
+    }
+}
+
 struct App {
     wallet: Feed<(), Project>,
     queue: Pane<Job>,
@@ -385,6 +426,11 @@ struct App {
     only_me: bool,
     /// The startup update check, which reports into the footer.
     update: update::Check,
+    /// Cancellations asked for with `dd`, running in the background.
+    cancels: Cancels,
+    /// What the footer says instead of the keys, when a cancellation has
+    /// something to ask or to report.
+    prompt: Option<Prompt>,
     should_quit: bool,
 }
 
@@ -404,6 +450,8 @@ impl App {
             } else {
                 update::Check::idle()
             },
+            cancels: Cancels::new(),
+            prompt: None,
             should_quit: false,
         }
     }
@@ -421,6 +469,8 @@ impl App {
             // Drained every pass, dirty or not: a result left sitting in a
             // channel is a pane showing something stale.
             dirty |= self.update.apply_update();
+            dirty |= self.expire_prompt();
+            dirty |= self.apply_cancels();
             dirty |= self.wallet.apply_updates(&());
             dirty |= self.queue.apply_updates(self.only_me);
             if self.recent.apply_updates(self.only_me) {
@@ -598,12 +648,94 @@ impl App {
     }
 
     fn footer(&self) -> Line<'static> {
+        // A cancellation has the row while it has something to ask or report:
+        // the keys are always the same, and this is not.
+        if let Some(prompt) = &self.prompt {
+            return prompt.line();
+        }
+
         Line::from(format!(
-            " {} · tab focus · j/k move · ^d/^u page · m {} · r refresh · q quit",
+            " {} · tab focus · j/k move · ^d/^u page · {}m {} · r refresh · q quit",
             if self.only_me { "mine" } else { "all" },
+            // Only the queue holds jobs there is still anything to cancel.
+            if self.focus == Focus::Queue {
+                "dd cancel · "
+            } else {
+                ""
+            },
             if self.only_me { "all" } else { "mine" },
         ))
         .fg(Color::DarkGray)
+    }
+
+    /// Arm a cancellation, or carry out the one already armed.
+    ///
+    /// Only the queue: the other pane is jobs that have already ended, and
+    /// `scancel` has nothing to say to those.
+    fn cancel_selected(&mut self, prompt: Option<Prompt>) -> bool {
+        if self.focus != Focus::Queue {
+            return false;
+        }
+
+        match prompt {
+            // The second press, in time: cancel the job the first one named.
+            Some(Prompt::Confirm(id, armed)) if armed.elapsed() < CONFIRM => {
+                self.cancels.request(id.clone());
+                self.prompt = Some(Prompt::Sent(id));
+            }
+            // The first press, or one so late the prompt it answers is gone.
+            _ => {
+                let Some(job) = self.queue.feed.items.get(self.queue.selected) else {
+                    return false; // An empty queue has nothing to ask about.
+                };
+                self.prompt = Some(Prompt::Confirm(job.id.clone(), Instant::now()));
+            }
+        }
+
+        true
+    }
+
+    /// Drop a confirmation nobody answered in time, so the footer stops
+    /// offering what a `d` would no longer do.
+    fn expire_prompt(&mut self) -> bool {
+        if matches!(&self.prompt, Some(Prompt::Confirm(_, armed)) if armed.elapsed() >= CONFIRM) {
+            self.prompt = None;
+            return true;
+        }
+
+        false
+    }
+
+    /// Take whatever cancellations have come back and report the last of them.
+    /// Several at once is a footer's worth of one line, and the one still to be
+    /// told about is the one that just landed.
+    fn apply_cancels(&mut self) -> bool {
+        // Collected up front, so the loop can borrow self mutably.
+        let finished: Vec<_> = self.cancels.drain().collect();
+        if finished.is_empty() {
+            return false;
+        }
+
+        let mut cancelled = false;
+
+        for (id, result) in finished {
+            self.prompt = Some(match result {
+                Ok(()) => {
+                    cancelled = true;
+                    Prompt::Done(id)
+                }
+                Err(err) => Prompt::Failed(err.to_string()),
+            });
+        }
+
+        // The queue is a second out of date at worst, but the pane is the only
+        // confirmation that matters, so ask for it now rather than at the next
+        // tick.
+        if cancelled {
+            self.queue.feed.refresh(self.only_me);
+        }
+
+        true
     }
 
     /// Switch between the current user's jobs and everyone's, in both panes.
@@ -667,6 +799,12 @@ impl App {
             _ => return false,
         };
 
+        // Every press answers whatever the footer was saying: a `d` waiting on
+        // its pair is answered by anything else as no, and a result that has
+        // been read has had its row.
+        let prompt = self.prompt.take();
+        let changed = prompt.is_some();
+
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             // Raw mode swallows SIGINT, so quit on ctrl-c ourselves.
@@ -681,10 +819,13 @@ impl App {
             }
             KeyCode::Char('j') | KeyCode::Down => self.focused().select_next(),
             KeyCode::Char('k') | KeyCode::Up => self.focused().select_previous(),
+            KeyCode::Char('d') => return self.cancel_selected(prompt) || changed,
             KeyCode::Tab | KeyCode::BackTab => self.toggle_focus(),
             KeyCode::Char('m') => self.toggle_scope(),
             KeyCode::Char('r') => self.refresh(),
-            _ => return false,
+            // A key we do nothing with still clears the footer, if it had
+            // anything on it.
+            _ => return changed,
         }
 
         true
@@ -714,6 +855,7 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::crossterm::event::KeyEvent;
 
     /// A pane of `count` rows over a body `page` rows tall. Nothing polls
     /// behind it, and the rows are empty: scrolling never looks at what a row
@@ -823,5 +965,186 @@ mod tests {
         let mut pane = pane(100, 0);
 
         assert_eq!(pane.window(), 0..0);
+    }
+
+    /// A queue row with nothing filled in but the id: cancelling only ever
+    /// looks at that.
+    fn job(id: &str) -> Job {
+        Job {
+            id: id.to_string(),
+            partition: String::new(),
+            name: String::new(),
+            user: String::new(),
+            state: String::new(),
+            cpus: String::new(),
+            gpus: String::new(),
+            mem: String::new(),
+            time: String::new(),
+            nodes: String::new(),
+            reason: String::new(),
+        }
+    }
+
+    /// An app holding `jobs` in the queue. Nothing polls behind it, and a
+    /// cancellation it sends runs a closure rather than `scancel`.
+    fn app(jobs: &[&str]) -> App {
+        let idle = Duration::from_secs(3600);
+        let mut queue = Pane::new(Poller::spawn(idle, true, |_| Ok(Vec::new())));
+        queue.feed.items = jobs.iter().copied().map(job).collect();
+        queue.feed.loading = false;
+
+        App {
+            wallet: Feed::new(Poller::spawn(idle, (), |()| Ok(Vec::new()))),
+            queue,
+            recent: Pane::new(Poller::spawn(idle, true, |_| Ok(Vec::new()))),
+            costs: [0.0; cost::WINDOWS.len()],
+            focus: Focus::Queue,
+            only_me: true,
+            update: update::Check::idle(),
+            cancels: Cancels::running(|_| Ok(())),
+            prompt: None,
+            should_quit: false,
+        }
+    }
+
+    fn press(app: &mut App, code: KeyCode) -> bool {
+        app.handle_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)))
+    }
+
+    /// The job a `d` has armed on, if it has.
+    fn armed(app: &App) -> Option<&str> {
+        match &app.prompt {
+            Some(Prompt::Confirm(id, _)) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// The job a cancellation has been sent for, if one has.
+    fn sent(app: &App) -> Option<&str> {
+        match &app.prompt {
+            Some(Prompt::Sent(id)) => Some(id),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn one_d_only_asks() {
+        let mut app = app(&["308208", "311567"]);
+        app.queue.selected = 1;
+
+        assert!(press(&mut app, KeyCode::Char('d')));
+        assert_eq!(armed(&app), Some("311567"), "the selected job");
+    }
+
+    #[test]
+    fn a_second_d_cancels_it() {
+        let mut app = app(&["308208"]);
+
+        press(&mut app, KeyCode::Char('d'));
+        assert!(press(&mut app, KeyCode::Char('d')));
+
+        assert_eq!(sent(&app), Some("308208"));
+    }
+
+    /// The id is the one the prompt named, not whatever the cursor is over by
+    /// the time it is answered: the queue refetches every second.
+    #[test]
+    fn cancels_the_job_it_asked_about() {
+        let mut app = app(&["308208", "311567"]);
+
+        press(&mut app, KeyCode::Char('d'));
+        // A fetch lands between the two presses, with the job gone from it.
+        app.queue.feed.items = vec![job("311567")];
+        press(&mut app, KeyCode::Char('d'));
+
+        assert_eq!(sent(&app), Some("308208"));
+    }
+
+    /// Any other key is an answer of no, and costs a frame because the footer
+    /// has to go back to the keys.
+    #[test]
+    fn anything_else_answers_no() {
+        let mut app = app(&["308208"]);
+
+        press(&mut app, KeyCode::Char('d'));
+        assert!(press(&mut app, KeyCode::Char('j')));
+
+        assert!(app.prompt.is_none());
+    }
+
+    /// A `d` pressed a minute after another one is the first of its own pair,
+    /// not the second of that one.
+    #[test]
+    fn a_late_d_asks_again() {
+        let mut app = app(&["308208"]);
+        app.prompt = Some(Prompt::Confirm(
+            "308208".to_string(),
+            Instant::now() - CONFIRM,
+        ));
+
+        press(&mut app, KeyCode::Char('d'));
+
+        assert_eq!(armed(&app), Some("308208"));
+        assert_eq!(sent(&app), None, "nothing was cancelled");
+    }
+
+    /// And the question stops being asked once it is too late to answer it,
+    /// rather than sitting in the footer until the next key.
+    #[test]
+    fn the_question_expires() {
+        let mut app = app(&["308208"]);
+
+        press(&mut app, KeyCode::Char('d'));
+        assert!(!app.expire_prompt(), "still in time");
+
+        app.prompt = Some(Prompt::Confirm(
+            "308208".to_string(),
+            Instant::now() - CONFIRM,
+        ));
+        assert!(app.expire_prompt(), "redrawn without it");
+        assert!(app.prompt.is_none());
+    }
+
+    /// A result is not a question, so it stays put until it is read.
+    #[test]
+    fn a_result_does_not_expire() {
+        let mut app = app(&["308208"]);
+        app.prompt = Some(Prompt::Done("308208".to_string()));
+
+        assert!(!app.expire_prompt());
+        assert!(app.prompt.is_some());
+    }
+
+    /// The other pane is jobs that have already ended.
+    #[test]
+    fn d_asks_nothing_of_the_recent_pane() {
+        let mut app = app(&["308208"]);
+        app.focus = Focus::Recent;
+
+        assert!(!press(&mut app, KeyCode::Char('d')));
+        assert!(app.prompt.is_none());
+    }
+
+    #[test]
+    fn d_asks_nothing_of_an_empty_queue() {
+        let mut app = app(&[]);
+
+        assert!(!press(&mut app, KeyCode::Char('d')));
+        assert!(app.prompt.is_none());
+    }
+
+    /// ctrl-d still pages, rather than arming the pane it just scrolled.
+    #[test]
+    fn ctrl_d_still_pages() {
+        let mut app = app(&["308208", "311567", "312000"]);
+        app.queue.page = 4;
+
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        )));
+
+        assert!(app.prompt.is_none());
+        assert_eq!(app.queue.selected, 2);
     }
 }
