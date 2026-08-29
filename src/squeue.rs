@@ -1,5 +1,8 @@
 use std::io;
 use std::process::Command;
+use std::time::Duration;
+
+use crate::poller::Poller;
 
 /// The squeue fields we ask for, in the order the table renders them.
 const FORMAT: &str = "%i|%P|%j|%u|%T|%M|%D|%R";
@@ -61,4 +64,14 @@ pub fn fetch(only_me: bool) -> io::Result<Vec<Job>> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.lines().filter_map(Job::parse).collect())
+}
+
+/// How often to re-run `squeue`. Cheap enough to sit at the front of the
+/// refresh order, since the job list is what actually changes minute to minute.
+const INTERVAL: Duration = Duration::from_secs(1);
+
+/// Start polling `squeue` in the background. The request is the `--me` scope,
+/// so a toggle takes effect on the next fetch and tags what comes back.
+pub fn poll(only_me: bool) -> Poller<bool, Vec<Job>> {
+    Poller::spawn(INTERVAL, only_me, fetch)
 }

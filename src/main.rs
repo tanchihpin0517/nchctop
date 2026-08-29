@@ -1,7 +1,8 @@
+mod poller;
 mod squeue;
 
 use std::io;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use clap::Parser;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -11,6 +12,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Row, Table, TableState};
 use ratatui::{DefaultTerminal, Frame};
 
+use crate::poller::Poller;
 use crate::squeue::Job;
 
 /// A top-like view of Slurm jobs on the NCHC cluster.
@@ -18,11 +20,9 @@ use crate::squeue::Job;
 #[command(version, about)]
 struct Cli {}
 
-/// How long to wait for input before redrawing.
-const TICK: Duration = Duration::from_millis(250);
-
-/// How often to re-run squeue.
-const REFRESH: Duration = Duration::from_secs(2);
+/// How long to wait for input before redrawing. Also the longest a finished
+/// squeue can sit in the channel before it reaches the screen.
+const TICK: Duration = Duration::from_millis(100);
 
 const COLUMNS: [(&str, Constraint); 8] = [
     ("JOBID", Constraint::Length(8)),
@@ -44,53 +44,75 @@ struct App {
     table: TableState,
     /// Rows visible in the table body, measured at draw time for ctrl-d/ctrl-u.
     page: usize,
-    last_refresh: Instant,
+    /// Feeds `jobs` from a background thread; dropped on quit, which stops it.
+    poller: Poller<bool, Vec<Job>>,
+    /// Cleared once the first squeue comes back, so an empty queue and a
+    /// queue we have not read yet do not look the same.
+    loading: bool,
     should_quit: bool,
 }
 
 impl App {
     fn new() -> Self {
+        let only_me = true;
+
         Self {
             jobs: Vec::new(),
             error: None,
-            only_me: true,
+            only_me,
             table: TableState::new().with_selected(0),
             page: 0,
-            last_refresh: Instant::now(),
+            poller: squeue::poll(only_me),
+            loading: true,
             should_quit: false,
         }
     }
 
     fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
-        self.refresh();
-
         while !self.should_quit {
+            self.apply_updates();
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
-
-            if self.last_refresh.elapsed() >= REFRESH {
-                self.refresh();
-            }
         }
 
         Ok(())
     }
 
-    /// Re-run squeue, keeping the previous rows on screen if it fails.
-    fn refresh(&mut self) {
-        match squeue::fetch(self.only_me) {
-            Ok(jobs) => {
-                self.jobs = jobs;
-                self.error = None;
-            }
-            Err(err) => self.error = Some(err.to_string()),
+    /// Take whatever the poller has finished, keeping the previous rows on
+    /// screen if squeue failed.
+    fn apply_updates(&mut self) {
+        // Collected up front so the loop below can borrow self mutably, and
+        // filtered so a fetch still in flight when `m` was pressed is ignored.
+        let updates: Vec<_> = self
+            .poller
+            .drain()
+            .filter(|(scope, _)| *scope == self.only_me)
+            .collect();
+        if updates.is_empty() {
+            return;
         }
+
+        for (_, update) in updates {
+            match update {
+                Ok(jobs) => {
+                    self.jobs = jobs;
+                    self.error = None;
+                }
+                Err(err) => self.error = Some(err.to_string()),
+            }
+        }
+
+        self.loading = false;
 
         // The list can shrink out from under the selection.
         let selected = self.table.selected().unwrap_or(0);
         self.table
             .select(Some(selected.min(self.jobs.len().saturating_sub(1))));
-        self.last_refresh = Instant::now();
+    }
+
+    /// Ask the poller for a fresh squeue now, rather than at its next tick.
+    fn refresh(&mut self) {
+        self.poller.request(self.only_me);
     }
 
     fn draw(&mut self, frame: &mut Frame) {
@@ -116,8 +138,12 @@ impl App {
         match &self.error {
             Some(err) => Line::from(format!(" {err}")).fg(Color::Red),
             None => Line::from(format!(
-                " {} jobs · {} · j/k move · ^d/^u page · m {} · r refresh · q quit",
-                self.jobs.len(),
+                " {} · {} · j/k move · ^d/^u page · m {} · r refresh · q quit",
+                if self.loading {
+                    "loading".to_string()
+                } else {
+                    format!("{} jobs", self.jobs.len())
+                },
                 if self.only_me { "mine" } else { "all" },
                 if self.only_me { "all" } else { "mine" },
             ))
