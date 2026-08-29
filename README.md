@@ -61,6 +61,13 @@ The interval is the gap between fetches rather than a fixed period: a command
 that takes a while to return backs itself off instead of piling up overlapping
 runs.
 
+## Scope
+
+`m` switches the queue between your own jobs and everyone's, and the pane title
+says which it is showing. It moves the queue alone: the last-30d pane is always
+your own jobs, because it is there to answer what you have been running and
+what it cost, and the cost line beside it is read against your own balance.
+
 ## Cancel
 
 `d` twice on a queue row cancels that job. The first press asks, in the footer:
@@ -100,9 +107,9 @@ long job that straddles a boundary counts whole in the windows containing its
 start.
 
 This is an estimate, not the ledger. A job that asked for no GPUs bills against
-a rate this does not model and shows as free, and `m` widens the total to every
-user's jobs along with the panes. `wallet` remains the authority on what has
-actually been charged.
+a rate this does not model and shows as free. The total is always your own jobs,
+whichever way the queue is scoped, so it stays comparable with the balance to
+its left. `wallet` remains the authority on what has actually been charged.
 
 ## Credits
 

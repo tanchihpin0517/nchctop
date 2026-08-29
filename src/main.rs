@@ -226,8 +226,8 @@ impl<Req: PartialEq, T> Feed<Req, T> {
 ///
 /// The scroll position is ours rather than the table widget's, because the
 /// widget only ever sees one screenful; see [`Pane::window`].
-struct Pane<T> {
-    feed: Feed<bool, T>,
+struct Pane<Req, T> {
+    feed: Feed<Req, T>,
     /// Index into `feed.items`, not into what is on screen.
     selected: usize,
     /// The first of `feed.items` on screen.
@@ -236,8 +236,8 @@ struct Pane<T> {
     page: usize,
 }
 
-impl<T: Rows> Pane<T> {
-    fn new(poller: Poller<bool, Vec<T>>) -> Self {
+impl<Req: PartialEq, T: Rows> Pane<Req, T> {
+    fn new(poller: Poller<Req, Vec<T>>) -> Self {
         Self {
             feed: Feed::new(poller),
             selected: 0,
@@ -247,8 +247,8 @@ impl<T: Rows> Pane<T> {
     }
 
     /// Reports whether anything arrived, so the caller knows to redraw.
-    fn apply_updates(&mut self, scope: bool) -> bool {
-        if !self.feed.apply_updates(&scope) {
+    fn apply_updates(&mut self, request: Req) -> bool {
+        if !self.feed.apply_updates(&request) {
             return false;
         }
 
@@ -309,7 +309,7 @@ trait Scroll {
     fn scroll_half(&mut self, down: bool);
 }
 
-impl<T> Pane<T> {
+impl<Req, T> Pane<Req, T> {
     /// The rows to hand the table this frame, scrolled to keep the selection
     /// on screen.
     ///
@@ -356,7 +356,7 @@ impl<T> Pane<T> {
     }
 }
 
-impl<T> Scroll for Pane<T> {
+impl<Req, T> Scroll for Pane<Req, T> {
     fn select_next(&mut self) {
         self.move_selection(1, true);
     }
@@ -414,15 +414,16 @@ impl Prompt {
 
 struct App {
     wallet: Feed<(), Project>,
-    queue: Pane<Job>,
-    recent: Pane<Run>,
+    queue: Pane<bool, Job>,
+    recent: Pane<(), Run>,
     /// What the recent runs cost, over each of [`cost::WINDOWS`]. Totalled when
     /// a fetch lands rather than when the line is drawn: a month of everyone's
     /// jobs is tens of thousands of rows, and holding `j` must not re-add them
     /// all for every frame.
     costs: [f64; cost::WINDOWS.len()],
     focus: Focus,
-    /// Whether to ask both commands for only the current user's jobs.
+    /// Whether the queue asks `squeue` for only the current user's jobs. The
+    /// recent pane is always the current user's, whatever this says.
     only_me: bool,
     /// The startup update check, which reports into the footer.
     update: update::Check,
@@ -441,7 +442,7 @@ impl App {
         Self {
             wallet: Feed::new(wallet::poll()),
             queue: Pane::new(squeue::poll(only_me)),
-            recent: Pane::new(sacct::poll(only_me)),
+            recent: Pane::new(sacct::poll()),
             costs: [0.0; cost::WINDOWS.len()],
             focus: Focus::Queue,
             only_me,
@@ -473,7 +474,7 @@ impl App {
             dirty |= self.apply_cancels();
             dirty |= self.wallet.apply_updates(&());
             dirty |= self.queue.apply_updates(self.only_me);
-            if self.recent.apply_updates(self.only_me) {
+            if self.recent.apply_updates(()) {
                 self.costs = cost::totals(&self.recent.feed.items, Local::now().naive_local());
                 dirty = true;
             }
@@ -502,8 +503,13 @@ impl App {
         self.draw_header(frame, header);
 
         let focus = self.focus;
-        self.queue
-            .draw(frame, queue, "queue", focus == Focus::Queue);
+        // Only the queue has a scope to name; the other pane is always yours.
+        let scope = if self.only_me {
+            "queue · mine"
+        } else {
+            "queue · all"
+        };
+        self.queue.draw(frame, queue, scope, focus == Focus::Queue);
         self.recent
             .draw(frame, recent, "last 30d", focus == Focus::Recent);
         self.draw_footer(frame, footer);
@@ -655,14 +661,15 @@ impl App {
         }
 
         Line::from(format!(
-            " {} · tab focus · j/k move · ^d/^u page · {}m {} · r refresh · q quit",
-            if self.only_me { "mine" } else { "all" },
+            " tab focus · j/k move · ^d/^u page · {}m queue {} · r refresh · q quit",
             // Only the queue holds jobs there is still anything to cancel.
             if self.focus == Focus::Queue {
                 "dd cancel · "
             } else {
                 ""
             },
+            // What a press would switch to; which scope the queue is on now is
+            // in its own title, next to the rows it decides.
             if self.only_me { "all" } else { "mine" },
         ))
         .fg(Color::DarkGray)
@@ -738,14 +745,17 @@ impl App {
         true
     }
 
-    /// Switch between the current user's jobs and everyone's, in both panes.
+    /// Switch the queue between the current user's jobs and everyone's.
+    ///
+    /// The queue alone: the recent pane answers what *you* have been running
+    /// and what it cost, so a month of the whole cluster is never what is
+    /// wanted there, and the costs beside it are read against your own balance.
     fn toggle_scope(&mut self) {
         self.only_me = !self.only_me;
-        // Both lists are about to be replaced wholesale, so start at the top
+        // The list is about to be replaced wholesale, so start at the top
         // rather than partway down whatever arrives.
         self.queue.selected = 0;
-        self.recent.selected = 0;
-        self.refresh();
+        self.queue.feed.refresh(self.only_me);
     }
 
     fn toggle_focus(&mut self) {
@@ -760,7 +770,7 @@ impl App {
     fn refresh(&self) {
         self.wallet.refresh(());
         self.queue.feed.refresh(self.only_me);
-        self.recent.feed.refresh(self.only_me);
+        self.recent.feed.refresh(());
     }
 
     /// Wait up to a tick for input, then take everything else already queued.
@@ -860,7 +870,7 @@ mod tests {
     /// A pane of `count` rows over a body `page` rows tall. Nothing polls
     /// behind it, and the rows are empty: scrolling never looks at what a row
     /// holds, only at how many there are.
-    fn pane(count: usize, page: usize) -> Pane<()> {
+    fn pane(count: usize, page: usize) -> Pane<bool, ()> {
         let idle = Duration::from_secs(3600);
 
         Pane {
@@ -996,7 +1006,7 @@ mod tests {
         App {
             wallet: Feed::new(Poller::spawn(idle, (), |()| Ok(Vec::new()))),
             queue,
-            recent: Pane::new(Poller::spawn(idle, true, |_| Ok(Vec::new()))),
+            recent: Pane::new(Poller::spawn(idle, (), |()| Ok(Vec::new()))),
             costs: [0.0; cost::WINDOWS.len()],
             focus: Focus::Queue,
             only_me: true,
@@ -1005,6 +1015,14 @@ mod tests {
             prompt: None,
             should_quit: false,
         }
+    }
+
+    /// A finished run, for a recent pane that only has to have rows in it.
+    fn run() -> Run {
+        Run::parse(
+            "310011|dev|train-a|alice|FAILED|billing=12,cpu=12,gres/gpu=1,mem=200G,node=1|00:00:14|2026-08-28T19:56:24|1:0|2026-08-28T19:56:10",
+        )
+        .expect("parsed")
     }
 
     fn press(app: &mut App, code: KeyCode) -> bool {
@@ -1146,5 +1164,21 @@ mod tests {
 
         assert!(app.prompt.is_none());
         assert_eq!(app.queue.selected, 2);
+    }
+
+    /// `m` is the queue's key alone. The recent pane is always your own jobs,
+    /// so it keeps both its rows and your place in them.
+    #[test]
+    fn m_switches_the_queue_alone() {
+        let mut app = app(&["308208", "311567"]);
+        app.recent.feed.items = vec![run(), run()];
+        app.recent.selected = 1;
+        app.queue.selected = 1;
+
+        assert!(press(&mut app, KeyCode::Char('m')));
+
+        assert!(!app.only_me, "the queue widened to every user");
+        assert_eq!(app.queue.selected, 0, "a replaced queue starts at the top");
+        assert_eq!(app.recent.selected, 1, "the recent pane did not move");
     }
 }

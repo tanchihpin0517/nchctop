@@ -139,9 +139,12 @@ fn short_time(stamp: &str) -> String {
     }
 }
 
-/// Run `sacct` once over the recent window, newest job first. With `only_me`,
-/// asks for just the current user's jobs, which is sacct's own default.
-pub fn fetch(only_me: bool) -> io::Result<Vec<Run>> {
+/// Run `sacct` once over the recent window, newest job first.
+///
+/// Always the current user's own jobs, which is sacct's own default: the pane
+/// is there to answer what you have been running and what it cost, and the
+/// costs beside it are read against your own balance.
+pub fn fetch() -> io::Result<Vec<Run>> {
     let mut command = Command::new("sacct");
     command.args([
         "--parsable2",
@@ -151,9 +154,6 @@ pub fn fetch(only_me: bool) -> io::Result<Vec<Run>> {
         &format!("--starttime={WINDOW}"),
         &format!("--format={FORMAT}"),
     ]);
-    if !only_me {
-        command.arg("--allusers");
-    }
 
     let output = command.output()?;
 
@@ -175,10 +175,10 @@ pub fn fetch(only_me: bool) -> io::Result<Vec<Run>> {
     Ok(runs)
 }
 
-/// Start polling `sacct` in the background. The request is the scope, matching
-/// squeue so the `m` toggle means the same thing in both views.
-pub fn poll(only_me: bool) -> Poller<bool, Vec<Run>> {
-    Poller::spawn(INTERVAL, only_me, fetch)
+/// Start polling `sacct` in the background. There is nothing to vary from one
+/// fetch to the next, so the request carries nothing.
+pub fn poll() -> Poller<(), Vec<Run>> {
+    Poller::spawn(INTERVAL, (), |()| fetch())
 }
 
 #[cfg(test)]
