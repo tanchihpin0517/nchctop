@@ -5,6 +5,7 @@ mod tres;
 mod wallet;
 
 use std::io;
+use std::ops::Range;
 use std::time::Duration;
 
 use clap::Parser;
@@ -25,8 +26,8 @@ use crate::wallet::Project;
 #[command(version, about)]
 struct Cli {}
 
-/// How long to wait for input before redrawing. Also the longest a finished
-/// fetch can sit in a channel before it reaches the screen.
+/// How long to wait for input before looking at the pollers again. Also the
+/// longest a finished fetch can sit in a channel before it reaches the screen.
 const TICK: Duration = Duration::from_millis(100);
 
 /// Something that renders as a table row.
@@ -194,9 +195,15 @@ impl<Req: PartialEq, T> Feed<Req, T> {
 
 /// One list: its feed, and how it is scrolled. Both panes keep their own, so
 /// moving focus does not lose your place in the other.
+///
+/// The scroll position is ours rather than the table widget's, because the
+/// widget only ever sees one screenful; see [`Pane::window`].
 struct Pane<T> {
     feed: Feed<bool, T>,
-    table: TableState,
+    /// Index into `feed.items`, not into what is on screen.
+    selected: usize,
+    /// The first of `feed.items` on screen.
+    offset: usize,
     /// Rows visible in this pane's body, measured at draw time for ctrl-d/u.
     page: usize,
 }
@@ -205,20 +212,21 @@ impl<T: Rows> Pane<T> {
     fn new(poller: Poller<bool, Vec<T>>) -> Self {
         Self {
             feed: Feed::new(poller),
-            table: TableState::new().with_selected(0),
+            selected: 0,
+            offset: 0,
             page: 0,
         }
     }
 
-    fn apply_updates(&mut self, scope: bool) {
+    /// Reports whether anything arrived, so the caller knows to redraw.
+    fn apply_updates(&mut self, scope: bool) -> bool {
         if !self.feed.apply_updates(&scope) {
-            return;
+            return false;
         }
 
         // The list can shrink out from under the selection.
-        let selected = self.table.selected().unwrap_or(0);
-        self.table
-            .select(Some(selected.min(self.feed.items.len().saturating_sub(1))));
+        self.selected = self.selected.min(self.feed.items.len().saturating_sub(1));
+        true
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect, name: &str, focused: bool) {
@@ -247,13 +255,18 @@ impl<T: Rows> Pane<T> {
 
         let header = Row::new(T::COLUMNS.iter().map(|(title, _)| *title))
             .style(Style::new().add_modifier(Modifier::BOLD));
-        let rows = self.feed.items.iter().map(T::row);
+        let window = self.window();
+        let rows = self.feed.items[window.clone()].iter().map(T::row);
         let table = Table::new(rows, T::COLUMNS.iter().map(|(_, width)| *width))
             .header(header)
             .row_highlight_style(highlight)
             .block(Block::bordered().border_style(border).title(title));
 
-        frame.render_stateful_widget(table, area, &mut self.table);
+        // The widget is given the window alone, so the selection is renumbered
+        // against it and the scrolling it would do itself has nothing left to
+        // do.
+        let mut state = TableState::new().with_selected(self.selected - window.start);
+        frame.render_stateful_widget(table, area, &mut state);
     }
 }
 
@@ -268,29 +281,64 @@ trait Scroll {
     fn scroll_half(&mut self, down: bool);
 }
 
+impl<T> Pane<T> {
+    /// The rows to hand the table this frame, scrolled to keep the selection
+    /// on screen.
+    ///
+    /// [`Table`] collects every row it is given before drawing the handful
+    /// that fit, so passing it the whole list costs a frame proportional to
+    /// the number of jobs rather than to the size of the terminal — at the
+    /// tens of thousands `sacct` reports for every user over a month, half a
+    /// second of it. Scrolling here and passing only the window keeps a draw
+    /// the same price at eighty jobs and at eighty thousand.
+    fn window(&mut self) -> Range<usize> {
+        let len = self.feed.items.len();
+        if self.page == 0 || len == 0 {
+            return 0..0;
+        }
+
+        self.selected = self.selected.min(len - 1);
+
+        // Move by just enough to bring the selection back into view, so the
+        // list holds still whenever it can.
+        self.offset = self
+            .offset
+            .clamp(self.selected.saturating_sub(self.page - 1), self.selected)
+            // A list that just shrank must not leave the window off the end.
+            .min(len.saturating_sub(self.page));
+
+        self.offset..(self.offset + self.page).min(len)
+    }
+
+    /// Move the selection `rows` up or down, stopping at either end.
+    ///
+    /// The clamp is ours to apply: the table widget is only ever shown a
+    /// window, so it cannot pull a selection back from past the end the way
+    /// it could when it held the whole list.
+    fn move_selection(&mut self, rows: usize, down: bool) {
+        let Some(last) = self.feed.items.len().checked_sub(1) else {
+            return; // Nothing to select.
+        };
+
+        self.selected = if down {
+            self.selected.saturating_add(rows).min(last)
+        } else {
+            self.selected.saturating_sub(rows)
+        };
+    }
+}
+
 impl<T> Scroll for Pane<T> {
     fn select_next(&mut self) {
-        self.table.select_next();
+        self.move_selection(1, true);
     }
 
     fn select_previous(&mut self) {
-        self.table.select_previous();
+        self.move_selection(1, false);
     }
 
     fn scroll_half(&mut self, down: bool) {
-        if self.feed.items.is_empty() {
-            return;
-        }
-
-        let half = (self.page / 2).max(1);
-        let current = self.table.selected().unwrap_or(0);
-        let target = if down {
-            (current + half).min(self.feed.items.len() - 1)
-        } else {
-            current.saturating_sub(half)
-        };
-
-        self.table.select(Some(target));
+        self.move_selection((self.page / 2).max(1), down);
     }
 }
 
@@ -326,13 +374,27 @@ impl App {
         }
     }
 
+    /// Draw, then wait for something to happen; repeat.
+    ///
+    /// Only a change earns a frame. Drawing every tick regardless spent a
+    /// whole frame ten times a second whether or not anything had moved,
+    /// which on the longer lists was more work than a tick is long.
     fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+        // Nothing is on screen yet.
+        let mut dirty = true;
+
         while !self.should_quit {
-            self.wallet.apply_updates(&());
-            self.queue.apply_updates(self.only_me);
-            self.recent.apply_updates(self.only_me);
-            terminal.draw(|frame| self.draw(frame))?;
-            self.handle_events()?;
+            // Drained every pass, dirty or not: a result left sitting in a
+            // channel is a pane showing something stale.
+            dirty |= self.wallet.apply_updates(&());
+            dirty |= self.queue.apply_updates(self.only_me);
+            dirty |= self.recent.apply_updates(self.only_me);
+
+            if dirty {
+                terminal.draw(|frame| self.draw(frame))?;
+            }
+
+            dirty = self.handle_events()?;
         }
 
         Ok(())
@@ -398,8 +460,10 @@ impl App {
     /// Switch between the current user's jobs and everyone's, in both panes.
     fn toggle_scope(&mut self) {
         self.only_me = !self.only_me;
-        self.queue.table.select(Some(0));
-        self.recent.table.select(Some(0));
+        // Both lists are about to be replaced wholesale, so start at the top
+        // rather than partway down whatever arrives.
+        self.queue.selected = 0;
+        self.recent.selected = 0;
         self.refresh();
     }
 
@@ -418,36 +482,63 @@ impl App {
         self.recent.feed.refresh(self.only_me);
     }
 
-    fn handle_events(&mut self) -> io::Result<()> {
+    /// Wait up to a tick for input, then take everything else already queued.
+    /// Reports whether any of it changed what is on screen.
+    ///
+    /// The whole burst is handled before the next frame, so holding j or k
+    /// costs one draw rather than one per key repeat, and the selection comes
+    /// to rest where the key was let go instead of running on through a
+    /// backlog of frames.
+    fn handle_events(&mut self) -> io::Result<bool> {
         if !event::poll(TICK)? {
-            return Ok(());
+            return Ok(false);
         }
 
-        if let Event::Key(key) = event::read()?
-            && key.kind == KeyEventKind::Press
-        {
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
-                // Raw mode swallows SIGINT, so quit on ctrl-c ourselves.
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.should_quit = true
-                }
-                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.focused().scroll_half(true)
-                }
-                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.focused().scroll_half(false)
-                }
-                KeyCode::Char('j') | KeyCode::Down => self.focused().select_next(),
-                KeyCode::Char('k') | KeyCode::Up => self.focused().select_previous(),
-                KeyCode::Tab | KeyCode::BackTab => self.toggle_focus(),
-                KeyCode::Char('m') => self.toggle_scope(),
-                KeyCode::Char('r') => self.refresh(),
-                _ => {}
+        let mut changed = false;
+
+        // Polling with no timeout is how to ask whether another event is
+        // already waiting; `read` alone would block once the burst ran out.
+        while event::poll(Duration::ZERO)? {
+            changed |= self.handle_event(event::read()?);
+            if self.should_quit {
+                break;
             }
         }
 
-        Ok(())
+        Ok(changed)
+    }
+
+    /// Reports whether the event changed what is on screen, so a key we do
+    /// nothing with does not cost a frame.
+    fn handle_event(&mut self, event: Event) -> bool {
+        let key = match event {
+            // Everything has to be laid out again at the new size.
+            Event::Resize(..) => return true,
+            Event::Key(key) if key.kind == KeyEventKind::Press => key,
+            _ => return false,
+        };
+
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+            // Raw mode swallows SIGINT, so quit on ctrl-c ourselves.
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.should_quit = true
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.focused().scroll_half(true)
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.focused().scroll_half(false)
+            }
+            KeyCode::Char('j') | KeyCode::Down => self.focused().select_next(),
+            KeyCode::Char('k') | KeyCode::Up => self.focused().select_previous(),
+            KeyCode::Tab | KeyCode::BackTab => self.toggle_focus(),
+            KeyCode::Char('m') => self.toggle_scope(),
+            KeyCode::Char('r') => self.refresh(),
+            _ => return false,
+        }
+
+        true
     }
 
     /// The pane the movement keys act on.
@@ -463,4 +554,119 @@ fn main() -> io::Result<()> {
     let _cli = Cli::parse();
 
     ratatui::run(|terminal| App::new().run(terminal))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pane of `count` rows over a body `page` rows tall. Nothing polls
+    /// behind it, and the rows are empty: scrolling never looks at what a row
+    /// holds, only at how many there are.
+    fn pane(count: usize, page: usize) -> Pane<()> {
+        let idle = Duration::from_secs(3600);
+
+        Pane {
+            feed: Feed {
+                items: vec![(); count],
+                error: None,
+                loading: false,
+                poller: Poller::spawn(idle, true, |_| Ok(Vec::new())),
+            },
+            selected: 0,
+            offset: 0,
+            page,
+        }
+    }
+
+    /// A list that fits has nothing to scroll.
+    #[test]
+    fn takes_a_short_list_whole() {
+        let mut pane = pane(5, 20);
+
+        assert_eq!(pane.window(), 0..5);
+        assert_eq!(pane.offset, 0);
+    }
+
+    /// The point of the whole exercise: a month of everyone's jobs still costs
+    /// one screenful to draw.
+    #[test]
+    fn takes_only_a_screenful_of_a_long_list() {
+        let mut pane = pane(84_052, 20);
+
+        assert_eq!(pane.window(), 0..20);
+    }
+
+    #[test]
+    fn scrolls_down_to_keep_the_selection_in_view() {
+        let mut pane = pane(100, 10);
+
+        pane.selected = 9;
+        assert_eq!(pane.window(), 0..10, "the last row that already fits");
+
+        pane.selected = 10;
+        assert_eq!(pane.window(), 1..11, "one row further on, so one row moves");
+    }
+
+    #[test]
+    fn scrolls_back_up_to_the_selection() {
+        let mut pane = pane(100, 10);
+
+        pane.selected = 50;
+        assert_eq!(pane.window(), 41..51);
+
+        pane.selected = 20;
+        assert_eq!(pane.window(), 20..30, "the selection leads at the top edge");
+    }
+
+    /// The table only ever sees a window, so it cannot clamp on our behalf the
+    /// way it did when it held the whole list.
+    #[test]
+    fn the_selection_stops_at_both_ends() {
+        let mut pane = pane(3, 10);
+
+        for _ in 0..10 {
+            pane.move_selection(1, true);
+        }
+        assert_eq!(pane.selected, 2);
+
+        for _ in 0..10 {
+            pane.move_selection(1, false);
+        }
+        assert_eq!(pane.selected, 0);
+    }
+
+    #[test]
+    fn moving_within_an_empty_list_selects_nothing() {
+        let mut pane = pane(0, 10);
+        pane.move_selection(1, true);
+
+        assert_eq!(pane.selected, 0);
+        assert_eq!(pane.window(), 0..0);
+    }
+
+    /// A list can shrink under a window scrolled far down it — `m` back to
+    /// your own jobs does exactly that. Both the window and the selection have
+    /// to come back with it, or `draw` would slice past the end.
+    #[test]
+    fn a_shrinking_list_pulls_the_window_back() {
+        let mut pane = pane(100, 10);
+        pane.selected = 99;
+        assert_eq!(pane.window(), 90..100);
+
+        pane.feed.items.truncate(15);
+        let window = pane.window();
+
+        assert_eq!(window, 5..15);
+        assert!(window.contains(&pane.selected));
+    }
+
+    /// Before the first draw the body height is unmeasured, so there is no
+    /// window to take either.
+    #[test]
+    fn takes_no_rows_before_the_first_draw() {
+        let mut pane = pane(100, 0);
+
+        assert_eq!(pane.window(), 0..0);
+    }
 }
