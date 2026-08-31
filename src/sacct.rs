@@ -1,5 +1,6 @@
 use std::io;
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use chrono::NaiveDateTime;
@@ -10,10 +11,17 @@ use crate::tres;
 
 /// The sacct fields we ask for. The leading ones are in the order the table
 /// renders them, with `AllocTRES` expanding into the CPU, GPU and memory
-/// columns. The trailing three are not columns of their own: `Start` feeds the
-/// cost line, and `WorkDir` and `StdOut` feed the log column between them.
-const FORMAT: &str =
-    "JobID,Partition,JobName,User,State,AllocTRES,Elapsed,End,ExitCode,Start,WorkDir,StdOut";
+/// columns. The trailing two are not columns of their own: `Start` feeds the
+/// cost line, and `WorkDir` feeds half of the log column.
+const FIELDS: &str =
+    "JobID,Partition,JobName,User,State,AllocTRES,Elapsed,End,ExitCode,Start,WorkDir";
+
+/// The other half of the log column, asked for only where sacct knows it.
+///
+/// `StdOut` arrived in Slurm 24.05. An older sacct answers a format that names
+/// it with `Invalid field requested` and no rows at all, so asking anyway
+/// costs the whole pane rather than the one column.
+const STDOUT: &str = "StdOut";
 
 /// How far back the recent view looks. Slurm's time specification understands
 /// weeks but not months, so a month is spelled out in days.
@@ -62,20 +70,28 @@ impl Run {
     /// down.
     pub(crate) fn parse(line: &str) -> Option<Self> {
         let fields: Vec<&str> = line.splitn(12, '|').collect();
-        let [
-            id,
-            partition,
-            name,
-            user,
-            state,
-            tres,
-            elapsed,
-            end,
-            exit,
-            start,
-            workdir,
-            stdout,
-        ] = fields[..]
+
+        // The log is the one field a line may be short of, because a sacct too
+        // old for [`STDOUT`] was never asked for it. Missing reads the same as
+        // the empty field a job that writes no file leaves: no log, rather
+        // than a row to throw away.
+        let stdout = fields.get(11).copied().unwrap_or("");
+
+        let Some(
+            &[
+                id,
+                partition,
+                name,
+                user,
+                state,
+                tres,
+                elapsed,
+                end,
+                exit,
+                start,
+                workdir,
+            ],
+        ) = fields.get(..11)
         else {
             return None;
         };
@@ -160,6 +176,37 @@ fn short_time(stamp: &str) -> String {
     }
 }
 
+/// The fields this cluster's sacct is asked for: [`FIELDS`], with the log
+/// field on the end where that is one this sacct has.
+fn fields() -> String {
+    match supports_stdout() {
+        true => format!("{FIELDS},{STDOUT}"),
+        false => FIELDS.to_string(),
+    }
+}
+
+/// Whether the installed sacct knows [`STDOUT`].
+///
+/// `--helpformat` is the list of fields it will accept, which is a cheaper
+/// question than a failed query and a clearer one than the version number.
+/// Asked once, because the sacct on `PATH` does not change under a running
+/// program and the answer is wanted every five seconds.
+fn supports_stdout() -> bool {
+    static SUPPORTED: OnceLock<bool> = OnceLock::new();
+
+    *SUPPORTED.get_or_init(|| {
+        let Ok(output) = Command::new("sacct").arg("--helpformat").output() else {
+            // No sacct here to ask. The fetch that follows reports that itself,
+            // and reports it better than a missing column would.
+            return false;
+        };
+
+        String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .any(|field| field.eq_ignore_ascii_case(STDOUT))
+    })
+}
+
 /// Run `sacct` once over the recent window, newest job first.
 ///
 /// Always the current user's own jobs, which is sacct's own default: the pane
@@ -173,7 +220,7 @@ pub fn fetch() -> io::Result<Vec<Run>> {
         // Whole jobs only, not their .batch and .extern steps.
         "--allocations",
         &format!("--starttime={WINDOW}"),
-        &format!("--format={FORMAT}"),
+        &format!("--format={}", fields()),
     ]);
 
     let output = command.output()?;
@@ -253,6 +300,30 @@ mod tests {
         assert_eq!(run.gpu_count, 0);
         // The same row was launched with srun, which writes no file.
         assert_eq!(run.log, "-");
+    }
+
+    /// A sacct too old for `StdOut` was never asked for it, so its lines end
+    /// one field early and the log column has no file to name.
+    #[test]
+    fn parses_a_line_without_a_log_field() {
+        let run = Run::parse(
+            "310011|dev|train-a|alice|COMPLETED|billing=12,cpu=12,gres/gpu=1,mem=200G,node=1|00:00:14|2026-08-28T19:56:24|0:0|2026-08-28T19:56:10|/work/alice/amtpp",
+        )
+        .expect("parsed");
+
+        assert_eq!(run.id, "310011");
+        assert_eq!(run.gpus, "1");
+        assert_eq!(run.end, "08-28 19:56");
+        assert_eq!(run.log, "-");
+    }
+
+    /// The format asked for and the line read back have to agree on where the
+    /// log field is: on the end, after the eleven that are always there.
+    #[test]
+    fn asks_for_the_fields_it_reads() {
+        assert_eq!(FIELDS.split(',').count(), 11);
+        // Whichever sacct is installed, the leading fields are the same ones.
+        assert!(fields().starts_with(FIELDS));
     }
 
     /// A job that never ran has no start time to place it in a cost window.

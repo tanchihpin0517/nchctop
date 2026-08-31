@@ -108,6 +108,13 @@ not in either command's output.
 The column shows where standard output goes. A job that sent its errors
 somewhere else with `--error` has a second file the column does not name.
 
+On a Slurm older than 24.05 the last-30d pane shows a `-` for every job:
+`sacct` only learned to report a job's output file in that release, and a file
+Slurm did not name is one nchctop will not guess at. It asks that sacct what
+fields it knows rather than the other way around, so an older cluster is a
+column short rather than a pane that will not load. The queue pane is not
+affected — `squeue` reports the file itself — so a running job still previews.
+
 It is the last of twelve columns, so a terminal narrow enough to cut it off is
 the usual case rather than the awkward one. `l` and `h` walk the table sideways
 a column at a time, dropping `JOBID`, then `PARTITION`, and so on off the left
