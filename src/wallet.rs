@@ -4,8 +4,24 @@ use std::time::Duration;
 
 use crate::poller::Poller;
 
-/// How often to re-run `wallet`. Balances only move as jobs finish, so there
-/// is no point asking as often as we ask about the jobs themselves.
+/// How often to re-run `wallet`.
+///
+/// Long, because this is the one command here that is not Slurm. `wallet` is a
+/// wrapper that `sudo`s to another account to run the real thing, which asks a
+/// billing service: about 80ms of that is the privilege switch and the rest is
+/// the query, for some 300 to 600ms all told against the thirty milliseconds
+/// `squeue` and `sacct` take. It says itself that it "may take up to 5 seconds
+/// or more". Polling it at the rate of the job panes would spend a tenth of
+/// the session inside it.
+///
+/// Asking for every project at once, as [`fetch`] does, is the cheap way round:
+/// the per-project part of the answer costs about 80ms, so three projects in
+/// one call beat three calls naming one project each by more than twice over.
+///
+/// It does not need to be shorter. A balance moves when a job finishes, and a
+/// minute is the longest you would wait to see that — against a cost line that
+/// is only ever an estimate anyway, and against spending a tenth of the
+/// session asking.
 const INTERVAL: Duration = Duration::from_secs(60);
 
 /// One project's service-unit balance.

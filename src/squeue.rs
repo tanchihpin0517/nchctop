@@ -2,15 +2,21 @@ use std::io;
 use std::process::Command;
 use std::time::Duration;
 
+use crate::logfile;
 use crate::poller::Poller;
 use crate::tres;
 
-/// The squeue fields we ask for, in the order the table renders them, in the
-/// long `--Format` spelling: the short `%b` and `%m` report GPUs and memory
-/// per node, while `tres-alloc` reports the totals that sacct also reports.
-/// Each `:|` is a field width of "as wide as needed" plus a separator.
+/// The squeue fields we ask for, in the long `--Format` spelling: the short
+/// `%b` and `%m` report GPUs and memory per node, while `tres-alloc` reports
+/// the totals that sacct also reports. Each `:|` is a field width of "as wide
+/// as needed" plus a separator.
+///
+/// Mostly the order the table renders them in. `WorkDir` and `StdOut` are the
+/// exception: they feed one column between them, and they sit ahead of
+/// `Reason` so that the free-text field is still the last one, and can still
+/// keep any separator of its own.
 const FORMAT: &str = "JobID:|,Partition:|,Name:|,UserName:|,State:|,tres-alloc:|,\
-                      TimeUsed:|,NumNodes:|,NodeList:|,Reason:";
+                      TimeUsed:|,NumNodes:|,NodeList:|,WorkDir:|,StdOut:|,Reason:";
 
 /// One row of `squeue` output.
 pub struct Job {
@@ -25,6 +31,8 @@ pub struct Job {
     pub time: String,
     pub nodes: String,
     pub reason: String,
+    /// Where the job writes its output, or `-` for one that writes no file.
+    pub log: String,
 }
 
 impl Job {
@@ -32,7 +40,7 @@ impl Job {
     /// every field, so one malformed row cannot take the whole refresh down.
     fn parse(line: &str) -> Option<Self> {
         // splitn keeps any '|' inside the trailing reason field.
-        let fields: Vec<&str> = line.splitn(10, '|').collect();
+        let fields: Vec<&str> = line.splitn(12, '|').collect();
         let [
             id,
             partition,
@@ -43,6 +51,8 @@ impl Job {
             time,
             nodes,
             nodelist,
+            workdir,
+            stdout,
             reason,
         ] = fields[..]
         else {
@@ -52,6 +62,12 @@ impl Job {
         // A job that asked for no GPUs has no gres/gpu entry at all, rather
         // than a zero.
         let resource = |key| tres::value(tres, key).unwrap_or("-").to_string();
+
+        let job = logfile::Job {
+            id: id.trim(),
+            name: name.trim(),
+            user: user.trim(),
+        };
 
         Some(Self {
             id: id.trim().to_string(),
@@ -70,6 +86,7 @@ impl Job {
                 "" => format!("({})", reason.trim()),
                 nodelist => nodelist.to_string(),
             },
+            log: logfile::path(stdout, workdir, &job).unwrap_or_else(|| "-".to_string()),
         })
     }
 }
@@ -113,7 +130,8 @@ mod tests {
     use super::*;
 
     const RUNNING: &str = "308208|32gpus|train-a|alice|RUNNING|\
-        cpu=96,mem=4800G,node=3,billing=96,gres/gpu=24|22:46:39|3|gpn[001-003]|None";
+        cpu=96,mem=4800G,node=3,billing=96,gres/gpu=24|22:46:39|3|gpn[001-003]|\
+        /work/alice/amtpp|slurm-%j.out|None";
 
     /// The format string is written across two lines; the continuation must
     /// not smuggle whitespace into what squeue receives.
@@ -135,6 +153,8 @@ mod tests {
         assert_eq!(job.nodes, "3");
         // A running job shows where it landed, not why.
         assert_eq!(job.reason, "gpn[001-003]");
+        // squeue reports the pattern; the column reports the file.
+        assert_eq!(job.log, "/work/alice/amtpp/slurm-308208.out");
     }
 
     /// A pending job has no nodes yet, so the column carries the reason in
@@ -142,22 +162,38 @@ mod tests {
     #[test]
     fn shows_the_reason_when_a_job_is_pending() {
         let job = Job::parse(
-            "311567|8gpus|sample|bob|PENDING|cpu=8,mem=200G,node=1,gres/gpu=1|0:00|1||Dependency",
+            "311567|8gpus|sample|bob|PENDING|cpu=8,mem=200G,node=1,gres/gpu=1|0:00|1||\
+             /work/bob|logs/%x-%j.err|Dependency",
         )
         .expect("parsed");
 
         assert_eq!(job.reason, "(Dependency)");
         assert_eq!(job.gpus, "1");
+        // A job that has not started yet still knows where it will write.
+        assert_eq!(job.log, "/work/bob/logs/sample-311567.err");
     }
 
     #[test]
     fn marks_a_job_that_asked_for_no_gpus() {
-        let job =
-            Job::parse("312000|dev|cpu-only|alice|RUNNING|cpu=2,mem=16G,node=1|0:05|1|n01|None")
-                .expect("parsed");
+        let job = Job::parse(
+            "312000|dev|cpu-only|alice|RUNNING|cpu=2,mem=16G,node=1|0:05|1|n01|/work/alice||None",
+        )
+        .expect("parsed");
 
         assert_eq!(job.gpus, "-");
         assert_eq!(job.mem, "16G");
+    }
+
+    /// A job launched with `srun` has no output file, which the column has to
+    /// say rather than leaving blank.
+    #[test]
+    fn marks_a_job_that_writes_no_log() {
+        let job = Job::parse(
+            "312000|dev|cpu-only|alice|RUNNING|cpu=2,mem=16G,node=1|0:05|1|n01|/work/alice||None",
+        )
+        .expect("parsed");
+
+        assert_eq!(job.log, "-");
     }
 
     #[test]

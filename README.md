@@ -49,17 +49,39 @@ Or, from source:
 
 ## Refresh
 
-Each pane is fed by its own background thread, so a slow cluster never blocks
-the interface. Press `r` to refresh both at once.
+Everything on screen is fed by its own background thread, so a slow cluster
+never blocks the interface. Press `r` to refresh the wallet and both panes at
+once; the log window follows on its own.
 
 | Pane | Command | Interval |
 | --- | --- | --- |
 | queue | `squeue` | 1s |
-| last 30d | `sacct`, jobs started since `now-30days` | 30s |
+| last 30d | `sacct`, jobs started since `now-30days` | 5s |
+| wallet | `wallet` | 60s |
+| log window | the end of the job's output file | 1s, while following |
 
 The interval is the gap between fetches rather than a fixed period: a command
 that takes a while to return backs itself off instead of piling up overlapping
 runs.
+
+`wallet` is the odd one out, and the only command here that is not Slurm. It
+asks a billing service, takes about half a second against the thirty
+milliseconds the job commands take, and says itself that it "may take up to 5
+seconds or more" — so asking it as often as the panes ask about jobs would
+spend a tenth of the session inside it.
+
+It does not need to be asked that often either: a balance only moves as jobs
+finish, and a minute is the longest you would wait to see that. The cost beside
+it is the live half of the header — that one is recomputed on every `sacct`
+fetch, and counts a running job for the time it has run so far — while the
+balance is the settled half. They are different numbers measured different
+ways, so the balance keeping its own slower time is no loss.
+
+## Moving about
+
+`j`/`k` move the cursor and `ctrl-d`/`ctrl-u` move it half a screen, on
+whichever pane has focus; `tab` switches which that is. `l` and `h` scroll that
+pane's columns right and left, for rows wider than the terminal.
 
 ## Scope
 
@@ -67,6 +89,60 @@ runs.
 says which it is showing. It moves the queue alone: the last-30d pane is always
 your own jobs, because it is there to answer what you have been running and
 what it cost, and the cost line beside it is read against your own balance.
+
+## Logs
+
+The last column of both panes is the file the job writes its output to.
+
+Slurm stores that as the pattern the job was submitted with — `slurm-%j.out`,
+relative to the working directory — and the text output of `squeue` and `sacct`
+hands it back unexpanded. nchctop fills it in, so the column is a path you can
+open rather than a pattern you have to finish yourself.
+
+A `-` means the job writes no file at all: `srun` streams to the terminal it
+was launched from, and Slurm records nothing to point at. Only `sbatch` jobs
+have a log, and they record even their default. A `%N` left standing in a path
+is the one pattern nchctop cannot fill in, because the node a job landed on is
+not in either command's output.
+
+The column shows where standard output goes. A job that sent its errors
+somewhere else with `--error` has a second file the column does not name.
+
+It is the last of twelve columns, so a terminal narrow enough to cut it off is
+the usual case rather than the awkward one. `l` and `h` walk the table sideways
+a column at a time, dropping `JOBID`, then `PARTITION`, and so on off the left
+until the path has the room to be read whole. Rightwards stops with the last
+column still on screen, and each pane keeps its own place.
+
+## Preview
+
+`p` opens a floating window on the selected job's log, over both panes. The
+title is the job and the file; the bottom right says which end of it you are
+looking at.
+
+**It updates on its own, once a second**, so a running job's window keeps up
+with what the job is writing. The bottom right corner says so: `following` is
+the live end of the file.
+
+Scrolling back pauses that. `back` is counted from the end, so lines arriving
+while you are reading history would slide the text down by however many the job
+just wrote — the window keeps what it has instead, and the corner reads
+`12 lines back · paused · G to follow`. `G` returns to the end and starts the
+reading again, with a read straight away rather than a wait for the next
+second. The reader is idled while paused, so a window left scrolled back is not
+costing a read a second either.
+
+`j`/`k` move a line and `ctrl-d`/`ctrl-u` move half a window; `p` or `esc`
+closes it, and the reading stops with it. While the window is open it has the
+keys, so `dd` cannot reach the queue through it.
+
+Only the end of the file is read — the last 64 KiB, for the last 400 lines —
+so opening a window on a training log costs the same whether it is a kilobyte
+or a gigabyte. A progress bar that redraws itself with carriage returns shows
+as the line it last wrote rather than as all of its history, and colour codes
+are dropped.
+
+`p` on a job with no log does nothing: see the `-` above.
 
 ## Cancel
 

@@ -73,7 +73,7 @@ mod tests {
         };
 
         format!(
-            "310011|dev|job|alice|COMPLETED|billing=12,cpu=12,{gres}mem=200G,node=1|{elapsed}|Unknown|0:0|{start}"
+            "310011|dev|job|alice|COMPLETED|billing=12,cpu=12,{gres}mem=200G,node=1|{elapsed}|Unknown|0:0|{start}|/work/alice|slurm-%j.out"
         )
     }
 

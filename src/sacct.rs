@@ -4,22 +4,32 @@ use std::time::Duration;
 
 use chrono::NaiveDateTime;
 
+use crate::logfile;
 use crate::poller::Poller;
 use crate::tres;
 
 /// The sacct fields we ask for. The leading ones are in the order the table
 /// renders them, with `AllocTRES` expanding into the CPU, GPU and memory
-/// columns; `Start` trails them because it feeds the cost line rather than a
-/// column of its own.
-const FORMAT: &str = "JobID,Partition,JobName,User,State,AllocTRES,Elapsed,End,ExitCode,Start";
+/// columns. The trailing three are not columns of their own: `Start` feeds the
+/// cost line, and `WorkDir` and `StdOut` feed the log column between them.
+const FORMAT: &str =
+    "JobID,Partition,JobName,User,State,AllocTRES,Elapsed,End,ExitCode,Start,WorkDir,StdOut";
 
 /// How far back the recent view looks. Slurm's time specification understands
 /// weeks but not months, so a month is spelled out in days.
 const WINDOW: &str = "now-30days";
 
-/// How often to re-run `sacct`. Much slower than squeue: the accounting
-/// database is heavier to query and finished jobs never change again.
-const INTERVAL: Duration = Duration::from_secs(30);
+/// How often to re-run `sacct`. Slower than squeue, because the accounting
+/// database is the heavier thing to ask and a finished job never changes
+/// again — but not so slow that a job leaving the queue seems to fall into a
+/// gap before it reappears here. The pane is one user's own jobs over a month,
+/// which is hundreds of rows rather than the cluster's hundreds of thousands,
+/// and measures in tens of milliseconds.
+///
+/// [`Poller`] waits this long *between* fetches rather than running on a
+/// period, so a cluster where the query really is slow backs itself off
+/// instead of queueing up overlapping runs.
+const INTERVAL: Duration = Duration::from_secs(5);
 
 /// One job from the accounting database, finished or still going.
 ///
@@ -42,6 +52,8 @@ pub struct Run {
     pub runtime: Duration,
     /// `None` for a job that never started, which has nothing to bill.
     pub start: Option<NaiveDateTime>,
+    /// Where the job wrote its output, or `-` for one that wrote no file.
+    pub log: String,
 }
 
 impl Run {
@@ -49,7 +61,7 @@ impl Run {
     /// have every field, so one malformed row cannot take the whole refresh
     /// down.
     pub(crate) fn parse(line: &str) -> Option<Self> {
-        let fields: Vec<&str> = line.splitn(10, '|').collect();
+        let fields: Vec<&str> = line.splitn(12, '|').collect();
         let [
             id,
             partition,
@@ -61,6 +73,8 @@ impl Run {
             end,
             exit,
             start,
+            workdir,
+            stdout,
         ] = fields[..]
         else {
             return None;
@@ -69,6 +83,12 @@ impl Run {
         // A job that asked for no GPUs has no gres/gpu entry at all, rather
         // than a zero.
         let resource = |key| tres::value(tres, key).unwrap_or("-").to_string();
+
+        let job = logfile::Job {
+            id: id.trim(),
+            name: name.trim(),
+            user: user.trim(),
+        };
 
         Some(Self {
             id: id.trim().to_string(),
@@ -87,6 +107,7 @@ impl Run {
                 .unwrap_or(0),
             runtime: runtime(elapsed.trim()),
             start: timestamp(start.trim()),
+            log: logfile::path(stdout, workdir, &job).unwrap_or_else(|| "-".to_string()),
         })
     }
 }
@@ -188,7 +209,7 @@ mod tests {
     #[test]
     fn parses_a_finished_job() {
         let run = Run::parse(
-            "310011|dev|train-a|alice|FAILED|billing=12,cpu=12,gres/gpu=1,mem=200G,node=1|00:00:14|2026-08-28T19:56:24|1:0|2026-08-28T19:56:10",
+            "310011|dev|train-a|alice|FAILED|billing=12,cpu=12,gres/gpu=1,mem=200G,node=1|00:00:14|2026-08-28T19:56:24|1:0|2026-08-28T19:56:10|/work/alice/amtpp|slurm-%j.out",
         )
         .expect("parsed");
 
@@ -203,12 +224,14 @@ mod tests {
         assert_eq!(run.gpu_count, 1);
         assert_eq!(run.runtime, Duration::from_secs(14));
         assert_eq!(run.start, timestamp("2026-08-28T19:56:10"));
+        // sacct reports the pattern; the column reports the file.
+        assert_eq!(run.log, "/work/alice/amtpp/slurm-310011.out");
     }
 
     #[test]
     fn drops_the_uid_from_a_cancelled_state() {
         let run = Run::parse(
-            "311750|8gpus|train-b|alice|CANCELLED by 12345|billing=2,cpu=2,mem=16G,node=1|00:06:53|2026-08-29T02:58:11|0:0|2026-08-29T02:51:18",
+            "311750|8gpus|train-b|alice|CANCELLED by 12345|billing=2,cpu=2,mem=16G,node=1|00:06:53|2026-08-29T02:58:11|0:0|2026-08-29T02:51:18|/work/alice|slurm-%j.out",
         )
         .expect("parsed");
 
@@ -220,7 +243,7 @@ mod tests {
     #[test]
     fn marks_a_job_that_asked_for_no_gpus() {
         let run = Run::parse(
-            "312000|dev|cpu-only|alice|COMPLETED|billing=2,cpu=2,mem=16G,node=1|00:01:00|2026-08-29T02:58:11|0:0|2026-08-29T02:57:11",
+            "312000|dev|cpu-only|alice|COMPLETED|billing=2,cpu=2,mem=16G,node=1|00:01:00|2026-08-29T02:58:11|0:0|2026-08-29T02:57:11|/work/alice|",
         )
         .expect("parsed");
 
@@ -228,13 +251,15 @@ mod tests {
         assert_eq!(run.gpus, "-");
         assert_eq!(run.mem, "16G");
         assert_eq!(run.gpu_count, 0);
+        // The same row was launched with srun, which writes no file.
+        assert_eq!(run.log, "-");
     }
 
     /// A job that never ran has no start time to place it in a cost window.
     #[test]
     fn marks_a_job_that_never_started() {
         let run = Run::parse(
-            "312500|dev|never-ran|alice|CANCELLED|billing=2,cpu=2,mem=16G,node=1|00:00:00|Unknown|0:0|None",
+            "312500|dev|never-ran|alice|CANCELLED|billing=2,cpu=2,mem=16G,node=1|00:00:00|Unknown|0:0|None|/work/alice|slurm-%j.out",
         )
         .expect("parsed");
 

@@ -1,4 +1,6 @@
 mod cost;
+mod logfile;
+mod logtail;
 mod poller;
 mod sacct;
 mod scancel;
@@ -13,11 +15,11 @@ use std::time::{Duration, Instant};
 
 use chrono::Local;
 use clap::{Parser, Subcommand};
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Row, Table, TableState};
+use ratatui::widgets::{Block, Clear, Paragraph, Row, Table, TableState};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::poller::Poller;
@@ -66,7 +68,16 @@ trait Rows {
     /// What to call these in the pane title.
     const NOUN: &'static str;
 
-    fn row(&self) -> Row<'_>;
+    /// The cells, in `COLUMNS` order. Cells rather than a finished [`Row`],
+    /// because the pane drops the ones scrolled off the left before it builds
+    /// one; see [`Pane::draw`].
+    fn cells(&self) -> Vec<Line<'_>>;
+
+    /// The job this row is, for a preview window to name.
+    fn id(&self) -> &str;
+
+    /// Where it writes its output, or `-` for a job that writes no file.
+    fn log(&self) -> &str;
 }
 
 impl Rows for Job {
@@ -82,12 +93,13 @@ impl Rows for Job {
         ("TIME", Constraint::Length(10)),
         ("NODES", Constraint::Length(5)),
         ("NODELIST(REASON)", Constraint::Min(18)),
+        ("LOG", Constraint::Min(24)),
     ];
 
     const NOUN: &'static str = "jobs";
 
-    fn row(&self) -> Row<'_> {
-        Row::new([
+    fn cells(&self) -> Vec<Line<'_>> {
+        vec![
             Line::raw(&self.id),
             Line::raw(&self.partition),
             Line::raw(&self.name),
@@ -99,7 +111,16 @@ impl Rows for Job {
             Line::raw(&self.time),
             Line::raw(&self.nodes),
             Line::raw(&self.reason),
-        ])
+            Line::raw(&self.log),
+        ]
+    }
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn log(&self) -> &str {
+        &self.log
     }
 }
 
@@ -116,12 +137,13 @@ impl Rows for Run {
         ("ELAPSED", Constraint::Length(9)),
         ("END", Constraint::Length(11)),
         ("EXIT", Constraint::Length(6)),
+        ("LOG", Constraint::Min(24)),
     ];
 
     const NOUN: &'static str = "jobs";
 
-    fn row(&self) -> Row<'_> {
-        Row::new([
+    fn cells(&self) -> Vec<Line<'_>> {
+        vec![
             Line::raw(&self.id),
             Line::raw(&self.partition),
             Line::raw(&self.name),
@@ -133,7 +155,29 @@ impl Rows for Run {
             Line::raw(&self.elapsed),
             Line::raw(&self.end),
             Line::raw(&self.exit),
-        ])
+            Line::raw(&self.log),
+        ]
+    }
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn log(&self) -> &str {
+        &self.log
+    }
+}
+
+/// A box `width` and `height` per cent of `area`, in the middle of it.
+fn centred(area: Rect, width: u16, height: u16) -> Rect {
+    let box_width = area.width * width / 100;
+    let box_height = area.height * height / 100;
+
+    Rect {
+        x: area.x + (area.width - box_width) / 2,
+        y: area.y + (area.height - box_height) / 2,
+        width: box_width,
+        height: box_height,
     }
 }
 
@@ -232,6 +276,11 @@ struct Pane<Req, T> {
     selected: usize,
     /// The first of `feed.items` on screen.
     offset: usize,
+    /// The first of `COLUMNS` on screen. A row wider than the terminal is the
+    /// normal case here rather than an edge one — there are eleven columns
+    /// before the log path — so `h` and `l` walk the table sideways instead of
+    /// the columns fighting each other for the width.
+    column: usize,
     /// Rows visible in this pane's body, measured at draw time for ctrl-d/u.
     page: usize,
 }
@@ -242,6 +291,7 @@ impl<Req: PartialEq, T: Rows> Pane<Req, T> {
             feed: Feed::new(poller),
             selected: 0,
             offset: 0,
+            column: 0,
             page: 0,
         }
     }
@@ -281,11 +331,19 @@ impl<Req: PartialEq, T: Rows> Pane<Req, T> {
             Style::new()
         };
 
-        let header = Row::new(T::COLUMNS.iter().map(|(title, _)| *title))
+        // Everything from the column `h`/`l` has scrolled to, rightwards. The
+        // last column can be reached on its own, so there is always a way to
+        // read a long path whole.
+        let first = self.column.min(T::COLUMNS.len().saturating_sub(1));
+        let columns = &T::COLUMNS[first..];
+
+        let header = Row::new(columns.iter().map(|(title, _)| *title))
             .style(Style::new().add_modifier(Modifier::BOLD));
         let window = self.window();
-        let rows = self.feed.items[window.clone()].iter().map(T::row);
-        let table = Table::new(rows, T::COLUMNS.iter().map(|(_, width)| *width))
+        let rows = self.feed.items[window.clone()]
+            .iter()
+            .map(|item| Row::new(item.cells().into_iter().skip(first)));
+        let table = Table::new(rows, columns.iter().map(|(_, width)| *width))
             .header(header)
             .row_highlight_style(highlight)
             .block(Block::bordered().border_style(border).title(title));
@@ -307,6 +365,13 @@ trait Scroll {
 
     /// Move the selection half a screen, the way vim's ctrl-d / ctrl-u do.
     fn scroll_half(&mut self, down: bool);
+
+    /// Move the table one column left or right, stopping at either end.
+    fn scroll_column(&mut self, right: bool);
+
+    /// The selected row's job id and log path, for `p` to open. `None` when
+    /// there is no selection, or when that job writes no log.
+    fn selected_log(&self) -> Option<(String, String)>;
 }
 
 impl<Req, T> Pane<Req, T> {
@@ -356,7 +421,7 @@ impl<Req, T> Pane<Req, T> {
     }
 }
 
-impl<Req, T> Scroll for Pane<Req, T> {
+impl<Req, T: Rows> Scroll for Pane<Req, T> {
     fn select_next(&mut self) {
         self.move_selection(1, true);
     }
@@ -368,6 +433,39 @@ impl<Req, T> Scroll for Pane<Req, T> {
     fn scroll_half(&mut self, down: bool) {
         self.move_selection((self.page / 2).max(1), down);
     }
+
+    fn scroll_column(&mut self, right: bool) {
+        // Stop with the last column still on screen; scrolling past the end
+        // would leave the pane empty with no sign of which way back.
+        let last = T::COLUMNS.len().saturating_sub(1);
+        self.column = if right {
+            (self.column + 1).min(last)
+        } else {
+            self.column.saturating_sub(1)
+        };
+    }
+
+    fn selected_log(&self) -> Option<(String, String)> {
+        let row = self.feed.items.get(self.selected)?;
+        match row.log() {
+            // The dash the column shows for a job Slurm recorded no file for.
+            "-" | "" => None,
+            path => Some((row.id().to_string(), path.to_string())),
+        }
+    }
+}
+
+/// An open preview window: which job's log, and how far back through it.
+///
+/// The path is held rather than looked up again each frame, so a refresh
+/// landing while the window is open cannot slide a different job's log under
+/// it — the same reason `dd` reads its job id when the question is asked.
+struct Preview {
+    id: String,
+    path: String,
+    /// Lines scrolled up from the end. Zero is the live end of the file, which
+    /// is where a preview opens and where a running job keeps writing.
+    back: usize,
 }
 
 /// Which pane the movement keys act on. Both stay on screen and both keep
@@ -432,6 +530,13 @@ struct App {
     /// What the footer says instead of the keys, when a cancellation has
     /// something to ask or to report.
     prompt: Option<Prompt>,
+    /// The floating log window, when `p` has opened one.
+    preview: Option<Preview>,
+    /// Lines visible in that window, measured at draw time for ctrl-d/ctrl-u.
+    preview_page: usize,
+    /// The lines behind it, re-read while it is open. One feed rather than one
+    /// per window: only ever one is open.
+    tail: Feed<Option<String>, String>,
     should_quit: bool,
 }
 
@@ -453,6 +558,9 @@ impl App {
             },
             cancels: Cancels::new(),
             prompt: None,
+            preview: None,
+            preview_page: 0,
+            tail: Feed::new(logtail::poll()),
             should_quit: false,
         }
     }
@@ -478,6 +586,7 @@ impl App {
                 self.costs = cost::totals(&self.recent.feed.items, Local::now().naive_local());
                 dirty = true;
             }
+            dirty |= self.apply_tail();
 
             if dirty {
                 terminal.draw(|frame| self.draw(frame))?;
@@ -513,6 +622,74 @@ impl App {
         self.recent
             .draw(frame, recent, "last 30d", focus == Focus::Recent);
         self.draw_footer(frame, footer);
+
+        // Last, and over the whole screen rather than one pane: it is a window
+        // on top of the interface, not a third pane in it.
+        self.draw_preview(frame, frame.area());
+    }
+
+    /// How much of the screen the log window takes. Wide, because a log line
+    /// is long and the window does not wrap them; short of the full screen,
+    /// because the panes behind it are the context for what it is showing.
+    const PREVIEW: (u16, u16) = (90, 70);
+
+    /// The floating window: the end of the selected job's log, re-read while
+    /// it is open so a running job's window keeps up with it.
+    fn draw_preview(&mut self, frame: &mut Frame, screen: Rect) {
+        let Some(preview) = &self.preview else {
+            return;
+        };
+
+        let (width, height) = Self::PREVIEW;
+        let area = centred(screen, width, height);
+
+        // The block's own borders are not room for lines.
+        let body = area.height.saturating_sub(2) as usize;
+        self.preview_page = body;
+
+        let lines = &self.tail.items;
+        // Stop scrolling with the first line we hold at the top: there is
+        // nothing above it to reach.
+        let back = preview.back.min(lines.len().saturating_sub(body));
+        let end = lines.len() - back;
+        let start = end.saturating_sub(body);
+
+        let body_text: Vec<Line> = match (&self.tail.error, self.tail.loading) {
+            (Some(err), _) => vec![Line::styled(err.clone(), Color::Red)],
+            (None, true) => vec![Line::styled("reading…", Color::DarkGray)],
+            // A file Slurm has named but the job has not written to yet.
+            (None, false) if lines.is_empty() => {
+                vec![Line::styled("empty", Color::DarkGray)]
+            }
+            (None, false) => lines[start..end].iter().map(Line::raw).collect(),
+        };
+
+        let title = Line::from(vec![
+            Span::raw(format!(" {} · ", preview.id)),
+            Span::styled(preview.path.clone(), Color::DarkGray),
+            Span::raw(" "),
+        ]);
+
+        // Which end of the file is on screen. A running job writes to the
+        // bottom, so saying when you are *not* there is the useful half.
+        let footer = Line::from(if back == 0 {
+            Span::styled(" following ", Color::Green)
+        } else {
+            Span::styled(
+                format!(" {back} lines back · paused · G to follow "),
+                Color::Yellow,
+            )
+        })
+        .right_aligned();
+
+        let block = Block::bordered()
+            .border_style(Style::new().fg(Color::Cyan))
+            .title(title)
+            .title_bottom(footer);
+
+        // The panes underneath would otherwise show through the gaps.
+        frame.render_widget(Clear, area);
+        frame.render_widget(Paragraph::new(body_text).block(block), area);
     }
 
     /// The footer: the keys on the left, what the update check came to on the
@@ -660,8 +837,14 @@ impl App {
             return prompt.line();
         }
 
+        // An open window has the keys, so it has the row that lists them.
+        if self.preview.is_some() {
+            return Line::from(" j/k scroll · ^d/^u page · G follow · p/esc close")
+                .fg(Color::DarkGray);
+        }
+
         Line::from(format!(
-            " tab focus · j/k move · ^d/^u page · {}m queue {} · r refresh · q quit",
+            " tab focus · j/k move · h/l cols · ^d/^u page · p log · {}m queue {} · r refresh · q quit",
             // Only the queue holds jobs there is still anything to cancel.
             if self.focus == Focus::Queue {
                 "dd cancel · "
@@ -815,6 +998,12 @@ impl App {
         let prompt = self.prompt.take();
         let changed = prompt.is_some();
 
+        // An open window is modal: it is one screenful of one file, and the
+        // keys that move it are the same ones that move a pane.
+        if self.preview.is_some() {
+            return self.handle_preview_key(key) || changed;
+        }
+
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             // Raw mode swallows SIGINT, so quit on ctrl-c ourselves.
@@ -829,7 +1018,10 @@ impl App {
             }
             KeyCode::Char('j') | KeyCode::Down => self.focused().select_next(),
             KeyCode::Char('k') | KeyCode::Up => self.focused().select_previous(),
+            KeyCode::Char('l') | KeyCode::Right => self.focused().scroll_column(true),
+            KeyCode::Char('h') | KeyCode::Left => self.focused().scroll_column(false),
             KeyCode::Char('d') => return self.cancel_selected(prompt) || changed,
+            KeyCode::Char('p') => return self.open_preview() || changed,
             KeyCode::Tab | KeyCode::BackTab => self.toggle_focus(),
             KeyCode::Char('m') => self.toggle_scope(),
             KeyCode::Char('r') => self.refresh(),
@@ -838,6 +1030,105 @@ impl App {
             _ => return changed,
         }
 
+        true
+    }
+
+    /// The path the open window is reading, which is also the reader's
+    /// request. `None` leaves the reader idle: no window is open, or the one
+    /// that is has been scrolled back off the end of the file.
+    fn previewing(&self) -> Option<String> {
+        match &self.preview {
+            Some(preview) if preview.back == 0 => Some(preview.path.clone()),
+            _ => None,
+        }
+    }
+
+    /// Whether the window is sitting at the live end of the file, which is
+    /// the only place new lines can be added without moving what is on screen.
+    fn following(&self) -> bool {
+        self.preview
+            .as_ref()
+            .is_some_and(|preview| preview.back == 0)
+    }
+
+    /// Take the reader's latest lines, if the window is in a state to accept
+    /// them.
+    ///
+    /// A window scrolled back is reading history: lines arriving at the end
+    /// would slide it down by however many the job just wrote, out from under
+    /// whoever is reading it. So it keeps what it has until `G` returns it to
+    /// the end. [`App::previewing`] idles the reader to match, so this is not
+    /// a queue building up behind a closed door.
+    fn apply_tail(&mut self) -> bool {
+        if !self.following() {
+            return false;
+        }
+
+        self.tail.apply_updates(&self.previewing())
+    }
+
+    /// Open a window on the selected job's log.
+    ///
+    /// Reports whether anything changed, so a `p` on a job with no log leaves
+    /// the screen alone rather than flashing an empty window at it.
+    fn open_preview(&mut self) -> bool {
+        let Some((id, path)) = self.focused().selected_log() else {
+            return false;
+        };
+
+        self.preview = Some(Preview {
+            id,
+            path: path.clone(),
+            back: 0,
+        });
+        // Nothing read yet: the window says so rather than showing the last
+        // job's lines while this one's are on their way.
+        self.tail.items.clear();
+        self.tail.error = None;
+        self.tail.loading = true;
+        self.tail.refresh(Some(path));
+        true
+    }
+
+    /// Close the window, and put the reader back to sleep.
+    ///
+    /// The poller holds its last request until it is given another, so leaving
+    /// the path behind would have it re-reading a file nobody is looking at
+    /// for the rest of the session.
+    fn close_preview(&mut self) {
+        self.preview = None;
+        self.tail.items = Vec::new();
+        self.tail.refresh(None);
+    }
+
+    /// The keys an open window answers. Movement is `j`/`k` and
+    /// `ctrl-d`/`ctrl-u`, the same as a pane, so there is one set to know.
+    fn handle_preview_key(&mut self, key: KeyEvent) -> bool {
+        // Measured at the last draw, so a page is a page of the window that is
+        // actually on screen.
+        let page = (self.preview_page / 2).max(1);
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        let Some(preview) = &mut self.preview else {
+            return false;
+        };
+
+        match key.code {
+            // ctrl-c still quits, from in here as much as from outside.
+            KeyCode::Char('c') if control => self.should_quit = true,
+            KeyCode::Char('q' | 'p') | KeyCode::Esc => self.close_preview(),
+            KeyCode::Char('d') if control => preview.back = preview.back.saturating_sub(page),
+            KeyCode::Char('u') if control => preview.back += page,
+            KeyCode::Char('j') | KeyCode::Down => preview.back = preview.back.saturating_sub(1),
+            KeyCode::Char('k') | KeyCode::Up => preview.back += 1,
+            // Back to the live end, which is where a running job is writing.
+            KeyCode::Char('G') => preview.back = 0,
+            _ => return false,
+        }
+
+        // Stepping off the end pauses the reading, and returning to it starts
+        // again — with a fetch straight away, so `G` is not a wait.
+        self.tail.refresh(self.previewing());
         true
     }
 
@@ -865,7 +1156,6 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::crossterm::event::KeyEvent;
 
     /// A pane of `count` rows over a body `page` rows tall. Nothing polls
     /// behind it, and the rows are empty: scrolling never looks at what a row
@@ -882,6 +1172,7 @@ mod tests {
             },
             selected: 0,
             offset: 0,
+            column: 0,
             page,
         }
     }
@@ -992,6 +1283,7 @@ mod tests {
             time: String::new(),
             nodes: String::new(),
             reason: String::new(),
+            log: String::new(),
         }
     }
 
@@ -1013,6 +1305,9 @@ mod tests {
             update: update::Check::idle(),
             cancels: Cancels::running(|_| Ok(())),
             prompt: None,
+            preview: None,
+            preview_page: 0,
+            tail: Feed::new(logtail::poll()),
             should_quit: false,
         }
     }
@@ -1020,13 +1315,173 @@ mod tests {
     /// A finished run, for a recent pane that only has to have rows in it.
     fn run() -> Run {
         Run::parse(
-            "310011|dev|train-a|alice|FAILED|billing=12,cpu=12,gres/gpu=1,mem=200G,node=1|00:00:14|2026-08-28T19:56:24|1:0|2026-08-28T19:56:10",
+            "310011|dev|train-a|alice|FAILED|billing=12,cpu=12,gres/gpu=1,mem=200G,node=1|00:00:14|2026-08-28T19:56:24|1:0|2026-08-28T19:56:10|/work/alice|slurm-%j.out",
         )
         .expect("parsed")
     }
 
     fn press(app: &mut App, code: KeyCode) -> bool {
         app.handle_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)))
+    }
+
+    /// `l` walks the table right, `h` walks it back.
+    #[test]
+    fn the_columns_move_sideways() {
+        let mut app = app(&["308208"]);
+
+        assert!(press(&mut app, KeyCode::Char('l')));
+        assert_eq!(app.queue.column, 1);
+
+        assert!(press(&mut app, KeyCode::Char('h')));
+        assert_eq!(app.queue.column, 0);
+    }
+
+    /// Rightwards stops with the last column still on screen, rather than
+    /// scrolling into an empty pane with no sign of the way back.
+    #[test]
+    fn the_columns_stop_at_both_ends() {
+        let mut app = app(&["308208"]);
+        let columns = <Job as Rows>::COLUMNS.len();
+
+        for _ in 0..columns * 2 {
+            press(&mut app, KeyCode::Char('l'));
+        }
+        assert_eq!(app.queue.column, columns - 1);
+
+        for _ in 0..columns * 2 {
+            press(&mut app, KeyCode::Char('h'));
+        }
+        assert_eq!(app.queue.column, 0);
+    }
+
+    /// Sideways is per pane, the way `j`/`k` already are: the two have
+    /// different columns, and reading one is not a reason to move the other.
+    #[test]
+    fn each_pane_keeps_its_own_column() {
+        let mut app = app(&["308208"]);
+
+        press(&mut app, KeyCode::Char('l'));
+        press(&mut app, KeyCode::Char('l'));
+        press(&mut app, KeyCode::Tab);
+
+        assert_eq!(app.queue.column, 2);
+        assert_eq!(app.recent.column, 0);
+    }
+
+    /// A queue row carrying a log path, which is what `p` opens.
+    fn job_with_log(id: &str, log: &str) -> Job {
+        let mut job = job(id);
+        job.log = log.to_string();
+        job
+    }
+
+    /// `p` opens a window on the selected job's log, and names the file the
+    /// reader is to read.
+    #[test]
+    fn opens_a_window_on_the_selected_log() {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "/work/alice/slurm-319141.out")];
+
+        assert!(press(&mut app, KeyCode::Char('p')));
+        assert_eq!(
+            app.previewing(),
+            Some("/work/alice/slurm-319141.out".to_string())
+        );
+    }
+
+    /// A job launched with `srun` has no file to show, so `p` does nothing —
+    /// rather than opening a window on an error.
+    #[test]
+    fn opens_nothing_for_a_job_with_no_log() {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "-")];
+
+        assert!(!press(&mut app, KeyCode::Char('p')));
+        assert_eq!(app.previewing(), None);
+    }
+
+    /// `p` again closes it, and the reader goes back to reading nothing.
+    #[test]
+    fn closes_the_window_and_stops_reading() {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "/work/alice/slurm-319141.out")];
+
+        press(&mut app, KeyCode::Char('p'));
+        assert!(press(&mut app, KeyCode::Char('p')));
+
+        assert_eq!(app.previewing(), None);
+        assert!(app.tail.items.is_empty());
+    }
+
+    /// An open window has the movement keys: `k` walks back up the log, and
+    /// the queue underneath keeps its own selection.
+    #[test]
+    fn the_window_takes_the_movement_keys() {
+        let mut app = app(&["319141", "319142"]);
+        app.queue.feed.items = vec![
+            job_with_log("319141", "/work/alice/a.out"),
+            job_with_log("319142", "/work/alice/b.out"),
+        ];
+
+        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Char('k'));
+        press(&mut app, KeyCode::Char('k'));
+
+        assert_eq!(app.preview.as_ref().expect("open").back, 2);
+        assert_eq!(app.queue.selected, 0, "the pane moved under the window");
+
+        // `j` walks back towards the end, and `G` returns to it outright.
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.preview.as_ref().expect("open").back, 1);
+        press(&mut app, KeyCode::Char('G'));
+        assert_eq!(app.preview.as_ref().expect("open").back, 0);
+    }
+
+    /// Scrolling back stops the window taking new lines, so what you are
+    /// reading does not slide down as the job writes more.
+    #[test]
+    fn scrolling_back_pauses_the_reading() {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "/work/alice/a.out")];
+
+        press(&mut app, KeyCode::Char('p'));
+        assert!(app.following());
+        assert_eq!(app.previewing(), Some("/work/alice/a.out".to_string()));
+
+        press(&mut app, KeyCode::Char('k'));
+        assert!(!app.following());
+        // The reader is idled too, rather than reading into a channel nobody
+        // is draining.
+        assert_eq!(app.previewing(), None);
+        assert!(!app.apply_tail(), "took lines while scrolled back");
+    }
+
+    /// `G` returns to the end, and the reading with it.
+    #[test]
+    fn following_again_starts_the_reading() {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "/work/alice/a.out")];
+
+        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Char('k'));
+        press(&mut app, KeyCode::Char('G'));
+
+        assert!(app.following());
+        assert_eq!(app.previewing(), Some("/work/alice/a.out".to_string()));
+    }
+
+    /// `dd` must not reach through an open window: the keys belong to it.
+    #[test]
+    fn the_window_swallows_a_cancellation() {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "/work/alice/a.out")];
+
+        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('d'));
+
+        assert_eq!(armed(&app), None);
+        assert_eq!(sent(&app), None);
     }
 
     /// The job a `d` has armed on, if it has.
