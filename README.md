@@ -132,9 +132,12 @@ reading again, with a read straight away rather than a wait for the next
 second. The reader is idled while paused, so a window left scrolled back is not
 costing a read a second either.
 
-`j`/`k` move a line and `ctrl-d`/`ctrl-u` move half a window; `p` or `esc`
-closes it, and the reading stops with it. While the window is open it has the
-keys, so `dd` cannot reach the queue through it.
+`j`/`k` move a line and `ctrl-d`/`ctrl-u` move half a window; `g` goes the
+other way from `G`, to the oldest line the window is holding — the oldest of
+the lines that were read, rather than the beginning of the file, because only
+the end of a file is ever read (below). `p` or `esc` closes it, and the reading
+stops with it. While the window is open it has the keys, so `dd` cannot reach
+the queue through it.
 
 A log line is written for a file rather than for a window, and the metrics a
 training step prints run well past the width of one. By default the window
@@ -143,11 +146,13 @@ file, and wrapping is what takes that apart. `h` and `l` walk sideways through
 what is off it, a column a press, and the bottom left corner says how far —
 `26 cols right`, because a log read from the middle of its lines looks like a
 log of fragments otherwise. A column rather than a jump: the column you want is
-the one you are reading, and a held key walks there. Rightwards stops with the
-end of the longest line on screen, the same as walking a pane's columns does —
-and stops there for good: a press that cannot move the text is not counted, so
-`h` starts back the moment it is pressed rather than working through a scroll
-you cannot see. `j`/`k` stop at the top of the log the same way.
+the one you are reading, and a held key walks there — with `0` and `$` for the
+two ends of the line when the walk is the wrong tool, the start of it in one
+press and as far right as `l` would go. Rightwards stops with the end of the
+longest line on screen, the same as walking a pane's columns does — and stops
+there for good: a press that cannot move the text is not counted, so `h` starts
+back the moment it is pressed rather than working through a scroll you cannot
+see. `j`/`k` stop at the top of the log the same way.
 
 `w` wraps instead, so every line is there without walking to it: a line too
 long for the window continues on the rows below, broken at the last space that

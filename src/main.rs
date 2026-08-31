@@ -962,12 +962,12 @@ impl App {
         // An open window has the keys, so it has the row that lists them.
         if self.preview.is_some() {
             return Line::from(format!(
-                " j/k scroll · ^d/^u page · {}G follow · w wrap {} · p/esc close",
+                " j/k scroll · ^d/^u page · g top · G follow · {}w wrap {} · p/esc close",
                 // Wrapped, there is nothing off the edge to walk to.
                 if self.preview_wrap {
                     ""
                 } else {
-                    "h/l cols · "
+                    "h/l cols · 0/$ line · "
                 },
                 // What a press would switch to, the same as `m` below.
                 if self.preview_wrap { "off" } else { "on" },
@@ -1235,7 +1235,9 @@ impl App {
     }
 
     /// The keys an open window answers. Movement is `j`/`k` and
-    /// `ctrl-d`/`ctrl-u`, the same as a pane, so there is one set to know.
+    /// `ctrl-d`/`ctrl-u`, the same as a pane, so there is one set to know;
+    /// `g`/`G` and `0`/`$` are the ends of the log and of the line, for the
+    /// walks that are a held key too many.
     fn handle_preview_key(&mut self, key: KeyEvent) -> bool {
         // Measured at the last draw, so a page is a page of the window that is
         // actually on screen, and the ends are the ends of what it is showing.
@@ -1271,8 +1273,17 @@ impl App {
             KeyCode::Char('h') | KeyCode::Left if !wrapping => {
                 preview.right = preview.right.saturating_sub(1);
             }
-            // Back to the live end, which is where a running job is writing.
+            // The ends of the line outright, for the walk back to the start of
+            // it that a held `h` otherwise is. `$` stops where `l` does: with
+            // the longest line on screen.
+            KeyCode::Char('0') if !wrapping => preview.right = 0,
+            KeyCode::Char('$') if !wrapping => preview.right = right_max,
+            // The ends of the log. `G` is the live end, which is where a
+            // running job is writing; `g` is the far end of what the window
+            // holds, which is the oldest of the lines that were read and not
+            // the beginning of the file — only the end of one is ever read.
             KeyCode::Char('G') => preview.back = 0,
+            KeyCode::Char('g') => preview.back = back_max,
             // Wrapping on and off. The position is a count of rows either way,
             // so the text shifts under it when the rows change shape — which
             // beats being put back at the end of a file you were reading the
@@ -1602,6 +1613,65 @@ mod tests {
         assert_eq!(app.preview.as_ref().expect("open").back, 1);
         press(&mut app, KeyCode::Char('G'));
         assert_eq!(app.preview.as_ref().expect("open").back, 0);
+    }
+
+    /// `g` and `G` are the two ends of the log outright: the oldest line the
+    /// window holds, and the live end a running job is writing to.
+    #[test]
+    fn the_window_jumps_to_either_end_of_the_log() {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "/work/alice/a.out")];
+
+        press(&mut app, KeyCode::Char('p'));
+        // As the last draw would have measured the log behind the window.
+        app.preview_back_max = 40;
+
+        assert!(press(&mut app, KeyCode::Char('g')));
+        assert_eq!(app.preview.as_ref().expect("open").back, 40);
+        // The far end is history, so the reading is idled there as it is for
+        // any other way of scrolling back.
+        assert!(!app.following());
+        assert_eq!(app.previewing(), None);
+
+        assert!(press(&mut app, KeyCode::Char('G')));
+        assert_eq!(app.preview.as_ref().expect("open").back, 0);
+        assert!(app.following());
+    }
+
+    /// `0` and `$` are the two ends of the line, so the start of it is one
+    /// press rather than a walk back through every column.
+    #[test]
+    fn the_window_jumps_to_either_end_of_the_line() {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "/work/alice/a.out")];
+
+        press(&mut app, KeyCode::Char('p'));
+        // As the last draw would have measured the longest line in it.
+        app.preview_right_max = 40;
+
+        assert!(press(&mut app, KeyCode::Char('$')));
+        assert_eq!(app.preview.as_ref().expect("open").right, 40);
+        // Sideways leaves the reading where it was: the window is still on the
+        // end of the file, just not on the start of its lines.
+        assert!(app.following());
+
+        assert!(press(&mut app, KeyCode::Char('0')));
+        assert_eq!(app.preview.as_ref().expect("open").right, 0);
+    }
+
+    /// Wrapped, the ends of a line are already on screen, so the keys that
+    /// reach for them have nothing to do.
+    #[test]
+    fn the_line_end_keys_do_nothing_wrapped() {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "/work/alice/a.out")];
+
+        press(&mut app, KeyCode::Char('p'));
+        app.preview_right_max = 40;
+        press(&mut app, KeyCode::Char('w'));
+
+        assert!(!press(&mut app, KeyCode::Char('$')));
+        assert_eq!(app.preview.as_ref().expect("open").right, 0);
     }
 
     /// Scrolling back stops the window taking new lines, so what you are
