@@ -181,6 +181,53 @@ fn centred(area: Rect, width: u16, height: u16) -> Rect {
     }
 }
 
+/// One log line as the rows a window `width` columns wide shows it in.
+///
+/// A log line is written for a file rather than for a window — a path, a
+/// config dump, a stack frame, a row of metrics — and cutting it at the border
+/// hides the half that says what happened. Breaking at the last space that
+/// fits keeps the words whole; a stretch with no space in it, a path or a
+/// progress bar, is cut at the border, there being nowhere better.
+///
+/// Columns are counted in characters, which is what a log's ASCII is.
+fn wrap(line: &str, width: usize) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    // A window with no room to wrap into. The line is handed back whole and
+    // the terminal clips it, rather than being cut one character at a time.
+    if width == 0 || chars.len() <= width {
+        return vec![line.to_string()];
+    }
+
+    let mut rows = Vec::new();
+    let mut rest = chars.as_slice();
+
+    while rest.len() > width {
+        // One space past the width still counts: the row has room for every
+        // character before it. A space with nothing but spaces ahead of it is
+        // not a break — an indented line would give up a row of blanks for it
+        // — so that falls through to the cut as well.
+        let cut = rest[..=width]
+            .iter()
+            .rposition(|c| *c == ' ')
+            .filter(|&at| rest[..at].iter().any(|c| *c != ' '))
+            .unwrap_or(width);
+
+        rows.push(rest[..cut].iter().collect());
+        // A space that was broken at is the break itself, and is not shown
+        // again at the start of the next row.
+        rest = &rest[cut + usize::from(rest[cut] == ' ')..];
+    }
+
+    // What is left, unless the break took the whole line and there is nothing
+    // after it. An empty line is the exception: it is a blank row in the log
+    // and stays one on screen.
+    if !rest.is_empty() || rows.is_empty() {
+        rows.push(rest.iter().collect());
+    }
+
+    rows
+}
+
 /// Colour a state the way you skim for one: green is fine, red is not.
 fn state_style(state: &str) -> Style {
     match state {
@@ -463,9 +510,15 @@ impl<Req, T: Rows> Scroll for Pane<Req, T> {
 struct Preview {
     id: String,
     path: String,
-    /// Lines scrolled up from the end. Zero is the live end of the file, which
-    /// is where a preview opens and where a running job keeps writing.
+    /// Rows of the window scrolled up from the end — rows rather than lines of
+    /// the file, because a line wrapped is several of them. Zero is the live
+    /// end of the file, which is where a preview opens and where a running job
+    /// keeps writing.
     back: usize,
+    /// Columns scrolled off the left, for the lines a window with wrapping off
+    /// cannot show whole. Zero is the start of the line, which is where the
+    /// timestamp and the level are.
+    right: usize,
 }
 
 /// Which pane the movement keys act on. Both stay on screen and both keep
@@ -534,6 +587,17 @@ struct App {
     preview: Option<Preview>,
     /// Lines visible in that window, measured at draw time for ctrl-d/ctrl-u.
     preview_page: usize,
+    /// How far the last draw could scroll: rows above the top of the window,
+    /// and columns of the longest line off the right of it. The keys clamp to
+    /// these, so one held past the end banks nothing — a position the window
+    /// cannot show is a press of `h` or `j` that moves nothing.
+    preview_back_max: usize,
+    preview_right_max: usize,
+    /// Whether the window wraps a line too long for it, rather than leaving
+    /// the rest of it off the edge. Off by default, and on the app rather than
+    /// on the [`Preview`], so a wrapping you turned on is still on for the
+    /// next log you open.
+    preview_wrap: bool,
     /// The lines behind it, re-read while it is open. One feed rather than one
     /// per window: only ever one is open.
     tail: Feed<Option<String>, String>,
@@ -560,6 +624,9 @@ impl App {
             prompt: None,
             preview: None,
             preview_page: 0,
+            preview_back_max: 0,
+            preview_right_max: 0,
+            preview_wrap: false,
             tail: Feed::new(logtail::poll()),
             should_quit: false,
         }
@@ -629,7 +696,8 @@ impl App {
     }
 
     /// How much of the screen the log window takes. Wide, because a log line
-    /// is long and the window does not wrap them; short of the full screen,
+    /// is long: unwrapped, every column is more of it you can read, and
+    /// wrapped, one fewer row it spills onto. Short of the full screen,
     /// because the panes behind it are the context for what it is showing.
     const PREVIEW: (u16, u16) = (90, 70);
 
@@ -643,25 +711,70 @@ impl App {
         let (width, height) = Self::PREVIEW;
         let area = centred(screen, width, height);
 
-        // The block's own borders are not room for lines.
+        // The block's own borders are neither room for rows nor columns to
+        // wrap into. The height is kept, so a page is a page of the window
+        // that is actually on screen.
         let body = area.height.saturating_sub(2) as usize;
+        let columns = area.width.saturating_sub(2) as usize;
         self.preview_page = body;
 
-        let lines = &self.tail.items;
-        // Stop scrolling with the first line we hold at the top: there is
-        // nothing above it to reach.
-        let back = preview.back.min(lines.len().saturating_sub(body));
-        let end = lines.len() - back;
+        // Wrapping off is the same lay-out with no border to break at: a line
+        // is one row however long it is, and what will not fit is off the edge
+        // until `h`/`l` bring it over. That is the default, because a log's
+        // columns line up down the file and wrapping is what takes that apart.
+        let width = if self.preview_wrap {
+            columns
+        } else {
+            usize::MAX
+        };
+
+        // Wrapped up front, so what is scrolled and what is shown are the same
+        // rows: a line four rows tall would otherwise be a scroll position
+        // that steps four rows at a time and a window that overruns its
+        // bottom, which is the end a running job writes to.
+        let rows: Vec<String> = self
+            .tail
+            .items
+            .iter()
+            .flat_map(|line| wrap(line, width))
+            .collect();
+
+        // Stop scrolling with the first row we hold at the top: there is
+        // nothing above it to reach. Sideways, stop with the end of the
+        // longest line we hold on screen, so `l` cannot walk off into a blank
+        // window — the same place walking a pane's columns stops. Wrapped
+        // there is nowhere to go at all: every line already ends inside the
+        // window.
+        let widest = rows.iter().map(|row| row.chars().count()).max();
+        self.preview_back_max = rows.len().saturating_sub(body);
+        self.preview_right_max = widest.unwrap_or(0).saturating_sub(columns);
+
+        // Clamped here as well as at the key, because the log is not the same
+        // length from one draw to the next: a fetch can leave a position the
+        // last press was entitled to.
+        let back = preview.back.min(self.preview_back_max);
+        let end = rows.len() - back;
         let start = end.saturating_sub(body);
+        let right = if self.preview_wrap {
+            0
+        } else {
+            preview.right.min(self.preview_right_max)
+        };
 
         let body_text: Vec<Line> = match (&self.tail.error, self.tail.loading) {
-            (Some(err), _) => vec![Line::styled(err.clone(), Color::Red)],
+            (Some(err), _) => wrap(err, width)
+                .into_iter()
+                .map(|row| Line::styled(row, Color::Red))
+                .collect(),
             (None, true) => vec![Line::styled("reading…", Color::DarkGray)],
             // A file Slurm has named but the job has not written to yet.
-            (None, false) if lines.is_empty() => {
+            (None, false) if rows.is_empty() => {
                 vec![Line::styled("empty", Color::DarkGray)]
             }
-            (None, false) => lines[start..end].iter().map(Line::raw).collect(),
+            (None, false) => rows[start..end]
+                .iter()
+                .map(|row| Line::raw(row.chars().skip(right).collect::<String>()))
+                .collect(),
         };
 
         let title = Line::from(vec![
@@ -682,10 +795,19 @@ impl App {
         })
         .right_aligned();
 
-        let block = Block::bordered()
+        let mut block = Block::bordered()
             .border_style(Style::new().fg(Color::Cyan))
             .title(title)
             .title_bottom(footer);
+
+        // Scrolled sideways, the left of every line is missing, which is worth
+        // saying: a log read from column 60 looks like a log of fragments.
+        if right > 0 {
+            let cols = if right == 1 { "col" } else { "cols" };
+            block = block.title_bottom(
+                Line::styled(format!(" {right} {cols} right "), Color::Yellow).left_aligned(),
+            );
+        }
 
         // The panes underneath would otherwise show through the gaps.
         frame.render_widget(Clear, area);
@@ -839,8 +961,18 @@ impl App {
 
         // An open window has the keys, so it has the row that lists them.
         if self.preview.is_some() {
-            return Line::from(" j/k scroll · ^d/^u page · G follow · p/esc close")
-                .fg(Color::DarkGray);
+            return Line::from(format!(
+                " j/k scroll · ^d/^u page · {}G follow · w wrap {} · p/esc close",
+                // Wrapped, there is nothing off the edge to walk to.
+                if self.preview_wrap {
+                    ""
+                } else {
+                    "h/l cols · "
+                },
+                // What a press would switch to, the same as `m` below.
+                if self.preview_wrap { "off" } else { "on" },
+            ))
+            .fg(Color::DarkGray);
         }
 
         Line::from(format!(
@@ -1080,6 +1212,7 @@ impl App {
             id,
             path: path.clone(),
             back: 0,
+            right: 0,
         });
         // Nothing read yet: the window says so rather than showing the last
         // job's lines while this one's are on their way.
@@ -1105,8 +1238,14 @@ impl App {
     /// `ctrl-d`/`ctrl-u`, the same as a pane, so there is one set to know.
     fn handle_preview_key(&mut self, key: KeyEvent) -> bool {
         // Measured at the last draw, so a page is a page of the window that is
-        // actually on screen.
+        // actually on screen, and the ends are the ends of what it is showing.
         let page = (self.preview_page / 2).max(1);
+        let (back_max, right_max) = (self.preview_back_max, self.preview_right_max);
+        // Read before the window is borrowed: the keys it answers depend on
+        // it, and `h`/`l` have nothing to reach when every line is wrapped.
+        let wrapping = self.preview_wrap;
+        // Which end of the file the window was on before the key.
+        let following = self.following();
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
 
         let Some(preview) = &mut self.preview else {
@@ -1118,17 +1257,37 @@ impl App {
             KeyCode::Char('c') if control => self.should_quit = true,
             KeyCode::Char('q' | 'p') | KeyCode::Esc => self.close_preview(),
             KeyCode::Char('d') if control => preview.back = preview.back.saturating_sub(page),
-            KeyCode::Char('u') if control => preview.back += page,
+            KeyCode::Char('u') if control => preview.back = (preview.back + page).min(back_max),
             KeyCode::Char('j') | KeyCode::Down => preview.back = preview.back.saturating_sub(1),
-            KeyCode::Char('k') | KeyCode::Up => preview.back += 1,
+            KeyCode::Char('k') | KeyCode::Up => preview.back = (preview.back + 1).min(back_max),
+            // Sideways, through the part of a long line the window has no
+            // room for. A column a press, because the column you want is the
+            // one you are reading and a jump would be something to come back
+            // from; a held key walks it. Wrapped, that part of the line is on
+            // the next row instead and these keys have nothing to do.
+            KeyCode::Char('l') | KeyCode::Right if !wrapping => {
+                preview.right = (preview.right + 1).min(right_max);
+            }
+            KeyCode::Char('h') | KeyCode::Left if !wrapping => {
+                preview.right = preview.right.saturating_sub(1);
+            }
             // Back to the live end, which is where a running job is writing.
             KeyCode::Char('G') => preview.back = 0,
+            // Wrapping on and off. The position is a count of rows either way,
+            // so the text shifts under it when the rows change shape — which
+            // beats being put back at the end of a file you were reading the
+            // middle of.
+            KeyCode::Char('w') => self.preview_wrap = !self.preview_wrap,
             _ => return false,
         }
 
         // Stepping off the end pauses the reading, and returning to it starts
-        // again — with a fetch straight away, so `G` is not a wait.
-        self.tail.refresh(self.previewing());
+        // again — with a fetch straight away, so `G` is not a wait. Only then:
+        // sideways and wrapping leave the reading alone, and a key held down
+        // must not be a read of `/work` a press.
+        if self.following() != following {
+            self.tail.refresh(self.previewing());
+        }
         true
     }
 
@@ -1155,6 +1314,9 @@ fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
     use super::*;
 
     /// A pane of `count` rows over a body `page` rows tall. Nothing polls
@@ -1307,6 +1469,9 @@ mod tests {
             prompt: None,
             preview: None,
             preview_page: 0,
+            preview_back_max: 0,
+            preview_right_max: 0,
+            preview_wrap: false,
             tail: Feed::new(logtail::poll()),
             should_quit: false,
         }
@@ -1424,6 +1589,8 @@ mod tests {
         ];
 
         press(&mut app, KeyCode::Char('p'));
+        // As the last draw would have measured the log behind the window.
+        app.preview_back_max = 40;
         press(&mut app, KeyCode::Char('k'));
         press(&mut app, KeyCode::Char('k'));
 
@@ -1445,6 +1612,7 @@ mod tests {
         app.queue.feed.items = vec![job_with_log("319141", "/work/alice/a.out")];
 
         press(&mut app, KeyCode::Char('p'));
+        app.preview_back_max = 40;
         assert!(app.following());
         assert_eq!(app.previewing(), Some("/work/alice/a.out".to_string()));
 
@@ -1463,6 +1631,7 @@ mod tests {
         app.queue.feed.items = vec![job_with_log("319141", "/work/alice/a.out")];
 
         press(&mut app, KeyCode::Char('p'));
+        app.preview_back_max = 40;
         press(&mut app, KeyCode::Char('k'));
         press(&mut app, KeyCode::Char('G'));
 
@@ -1635,5 +1804,300 @@ mod tests {
         assert!(!app.only_me, "the queue widened to every user");
         assert_eq!(app.queue.selected, 0, "a replaced queue starts at the top");
         assert_eq!(app.recent.selected, 1, "the recent pane did not move");
+    }
+
+    /// The window as it reaches a screen, so what the lay-out does to a long
+    /// line is checked and not only what [`wrap`] does to a string.
+    fn screen(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal =
+            Terminal::new(TestBackend::new(width, height)).expect("a terminal to draw on");
+        terminal.draw(|frame| app.draw(frame)).expect("drawn");
+
+        let buffer = terminal.backend().buffer().clone();
+        let area = buffer.area;
+
+        (area.top()..area.bottom())
+            .map(|y| {
+                (area.left()..area.right())
+                    .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// A window open on one long line, drawn once. The draw is what measures
+    /// the window, and the keys move by what it measured.
+    fn opened(line: &str) -> App {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "/work/alice/a.out")];
+
+        press(&mut app, KeyCode::Char('p'));
+        app.tail.items = vec![line.to_string()];
+        app.tail.loading = false;
+        screen(&mut app, 60, 20);
+
+        app
+    }
+
+    /// That window after `keys`, as it reaches the screen.
+    fn drawn(line: &str, keys: &[char]) -> Vec<String> {
+        let mut app = opened(line);
+
+        for key in keys {
+            press(&mut app, KeyCode::Char(*key));
+        }
+
+        screen(&mut app, 60, 20)
+    }
+
+    /// A 60-column screen leaves the window 52 columns inside its borders, and
+    /// this is the shape of the line that is a problem: the metrics a training
+    /// log prints run to twice that, and `grad 3.2` is the last of them the
+    /// window has room for.
+    const LONG: &str = "20:14:02 INFO step 1200 loss 0.4321 lr 1e-4 grad 3.2 \
+                        throughput 41.2 samples/s eta 3:12:44 marker-end";
+
+    /// Unwrapped, the line is cut at the border: the window shows the start of
+    /// it and the rest is off the edge.
+    #[test]
+    fn a_long_line_is_cut_at_the_border() {
+        let rows = drawn(LONG, &[]);
+
+        assert!(
+            rows.iter().any(|row| row.contains("20:14:02 INFO step")),
+            "the start of the line is on screen: {rows:#?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("throughput")),
+            "and what is past the border is not, unwrapped: {rows:#?}"
+        );
+    }
+
+    /// `w` puts the rest of it on the next row instead.
+    #[test]
+    fn wrapping_puts_the_rest_of_the_line_on_the_next_row() {
+        let rows = drawn(LONG, &['w']);
+
+        assert!(
+            rows.iter().any(|row| row.contains("20:14:02 INFO step")),
+            "the start is still there: {rows:#?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("throughput")),
+            "and what did not fit is on the rows below: {rows:#?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("marker-end")),
+            "down to the end of the line: {rows:#?}"
+        );
+    }
+
+    /// `l` brings the far side of the line over instead, a column a press, and
+    /// says how far it has shifted — a log read from the middle of its lines
+    /// looks like a log of fragments otherwise.
+    #[test]
+    fn walking_right_brings_the_rest_of_the_line_over() {
+        // One press is one column: the first character of every line goes, and
+        // the corner accounts for it in the singular.
+        let rows = drawn(LONG, &['l']);
+
+        assert!(
+            rows.iter().any(|row| row.contains("0:14:02 INFO step")),
+            "the line shifted by a column: {rows:#?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("1 col right")),
+            "and the window says so: {rows:#?}"
+        );
+
+        // Enough of them reach what the border was hiding.
+        let rows = drawn(LONG, &['l'; 26]);
+
+        assert!(
+            rows.iter().any(|row| row.contains("throughput")),
+            "what was past the border came over: {rows:#?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("20:14:02 INFO step")),
+            "and the start went off the left: {rows:#?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("26 cols right")),
+            "the window says it is not showing the start: {rows:#?}"
+        );
+    }
+
+    /// `l` held past the end of the longest line banks nothing. Counting on
+    /// past what the window can show would leave `h` pressing its way back
+    /// through a scroll that never moved the text in the first place.
+    #[test]
+    fn walking_right_stops_at_the_end_of_the_line() {
+        let mut app = opened(LONG);
+
+        // Far more presses than there are columns off the edge.
+        for _ in 0..100 {
+            press(&mut app, KeyCode::Char('l'));
+        }
+
+        // The window is 52 columns inside its borders, and stops with the end
+        // of the line against its right edge.
+        let end = LONG.chars().count() - 52;
+        assert_eq!(app.preview.as_ref().expect("open").right, end);
+
+        // So one `h` is one column back, and shows on screen.
+        assert!(press(&mut app, KeyCode::Char('h')));
+        assert_eq!(app.preview.as_ref().expect("open").right, end - 1);
+        assert!(
+            screen(&mut app, 60, 20)
+                .iter()
+                .any(|row| row.contains(&format!("{} cols right", end - 1))),
+            "the corner counts down from the end"
+        );
+    }
+
+    /// The same for `k` at the top of the log: a press that cannot move the
+    /// text does not become one you have to undo.
+    #[test]
+    fn scrolling_back_stops_at_the_top_of_the_log() {
+        let mut app = opened(LONG);
+
+        for _ in 0..100 {
+            press(&mut app, KeyCode::Char('k'));
+        }
+
+        // One line in a window with rows to spare: there is nothing above it,
+        // so the window never left the end and is still following.
+        assert_eq!(app.preview.as_ref().expect("open").back, 0);
+        assert!(app.following());
+    }
+
+    /// `w` turns wrapping on and off, and it is off to begin with: a log's
+    /// columns line up down the file, and wrapping is what takes that apart.
+    #[test]
+    fn w_turns_wrapping_on_and_off() {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "/work/alice/a.out")];
+
+        press(&mut app, KeyCode::Char('p'));
+        assert!(!app.preview_wrap, "wrapping is off to begin with");
+
+        assert!(press(&mut app, KeyCode::Char('w')));
+        assert!(app.preview_wrap);
+
+        assert!(press(&mut app, KeyCode::Char('w')));
+        assert!(!app.preview_wrap);
+    }
+
+    /// Wrapping is the app's and not the window's, so the next log you open is
+    /// wrapped too rather than turning it on again for every job.
+    #[test]
+    fn wrapping_outlives_the_window() {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "/work/alice/a.out")];
+
+        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Char('w'));
+        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Char('p'));
+
+        assert!(app.preview_wrap);
+    }
+
+    /// Unwrapped, `l` and `h` walk through the part of a long line the window
+    /// has no room for, a column a press.
+    #[test]
+    fn the_window_walks_sideways_unwrapped() {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "/work/alice/a.out")];
+
+        press(&mut app, KeyCode::Char('p'));
+        // As the last draw would have measured the longest line in it.
+        app.preview_right_max = 40;
+
+        assert!(press(&mut app, KeyCode::Char('l')));
+        assert!(press(&mut app, KeyCode::Char('l')));
+        assert_eq!(app.preview.as_ref().expect("open").right, 2);
+
+        assert!(press(&mut app, KeyCode::Char('h')));
+        assert_eq!(app.preview.as_ref().expect("open").right, 1);
+
+        // And not past the start of the line, back the other way.
+        assert!(press(&mut app, KeyCode::Char('h')));
+        assert!(press(&mut app, KeyCode::Char('h')));
+        assert_eq!(app.preview.as_ref().expect("open").right, 0);
+    }
+
+    /// Wrapped, there is nothing off the edge to reach: every line already
+    /// ends inside the window.
+    #[test]
+    fn the_sideways_keys_do_nothing_wrapped() {
+        let mut app = app(&["319141"]);
+        app.queue.feed.items = vec![job_with_log("319141", "/work/alice/a.out")];
+
+        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Char('w'));
+
+        assert!(!press(&mut app, KeyCode::Char('l')));
+        assert_eq!(app.preview.as_ref().expect("open").right, 0);
+    }
+
+    /// A line that fits is one row, untouched.
+    #[test]
+    fn leaves_a_line_that_fits_alone() {
+        assert_eq!(wrap("loss 0.83", 20), ["loss 0.83"]);
+        // Exactly the width is still a fit.
+        assert_eq!(wrap("0123456789", 10), ["0123456789"]);
+    }
+
+    /// The break is the last space that fits, so the words stay whole and the
+    /// space itself is not shown again at the start of the next row.
+    #[test]
+    fn breaks_a_long_line_at_a_space() {
+        assert_eq!(
+            wrap("step 1200 loss 0.4321 lr 1e-4", 15),
+            ["step 1200 loss", "0.4321 lr 1e-4"]
+        );
+    }
+
+    /// A path or a progress bar has no space to break at, and showing it cut
+    /// beats showing the first window of it and hiding the rest.
+    #[test]
+    fn cuts_a_stretch_with_no_space_in_it() {
+        assert_eq!(
+            wrap("/work/alice/checkpoints/step-1200.pt", 12),
+            ["/work/alice/", "checkpoints/", "step-1200.pt"]
+        );
+    }
+
+    /// An indented line — a stack frame, a nested config — must not spend a
+    /// row on its own indent.
+    #[test]
+    fn does_not_break_on_an_indent() {
+        assert_eq!(
+            wrap("    File \"/work/alice/train.py\"", 12),
+            ["    File", "\"/work/alice", "/train.py\""]
+        );
+    }
+
+    /// A blank line in the log is a blank row on screen, not a row dropped.
+    #[test]
+    fn keeps_a_blank_line() {
+        assert_eq!(wrap("", 10), [""]);
+    }
+
+    /// A line ending at the break has nothing after it, and no empty row for
+    /// what is not there.
+    #[test]
+    fn adds_no_row_for_a_trailing_space() {
+        assert_eq!(wrap("epoch 3 done ", 12), ["epoch 3 done"]);
+    }
+
+    /// A window with no columns in it cannot be wrapped into; the terminal
+    /// clips instead, rather than the line coming back one character a row.
+    #[test]
+    fn wraps_nothing_into_no_width() {
+        assert_eq!(wrap("loss 0.83", 0), ["loss 0.83"]);
     }
 }

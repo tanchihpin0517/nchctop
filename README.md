@@ -136,6 +136,28 @@ costing a read a second either.
 closes it, and the reading stops with it. While the window is open it has the
 keys, so `dd` cannot reach the queue through it.
 
+A log line is written for a file rather than for a window, and the metrics a
+training step prints run well past the width of one. By default the window
+leaves the rest of the line off the edge: a log's columns line up down the
+file, and wrapping is what takes that apart. `h` and `l` walk sideways through
+what is off it, a column a press, and the bottom left corner says how far —
+`26 cols right`, because a log read from the middle of its lines looks like a
+log of fragments otherwise. A column rather than a jump: the column you want is
+the one you are reading, and a held key walks there. Rightwards stops with the
+end of the longest line on screen, the same as walking a pane's columns does —
+and stops there for good: a press that cannot move the text is not counted, so
+`h` starts back the moment it is pressed rather than working through a scroll
+you cannot see. `j`/`k` stop at the top of the log the same way.
+
+`w` wraps instead, so every line is there without walking to it: a line too
+long for the window continues on the rows below, broken at the last space that
+fits, or cut at the border when it is a path or a progress bar with no space to
+break at. Wrapped, `h`/`l` have nothing to reach and the footer stops offering
+them. The setting outlasts the window, so the next log you open is wrapped too.
+Scrolling counts rows of the window either way, so the text shifts under your
+place when you turn it on rather than sending you back to the end of a file you
+were reading the middle of.
+
 Only the end of the file is read — the last 64 KiB, for the last 400 lines —
 so opening a window on a training log costs the same whether it is a kilobyte
 or a gigabyte. A progress bar that redraws itself with carriage returns shows
